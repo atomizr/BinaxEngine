@@ -407,39 +407,49 @@ void processInput(GLFWwindow* window, float deltaTime) {
     if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS)
         camera.position -= camera.up * speed;
 
-    // Захват мыши по ПКМ
+    // Переменные для отслеживания мыши (статик, чтобы сохранять между вызовами)
+    static double lastX = SCR_WIDTH / 2.0;
+    static double lastY = SCR_HEIGHT / 2.0;
+    static bool firstMouse = true;
+
+    // Обработка захвата мыши по ПКМ
     if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
         if (!camera.mouseCaptured) {
+            // Переход в режим захвата – сбрасываем координаты мыши, чтобы избежать скачка
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
             camera.mouseCaptured = true;
+            glfwGetCursorPos(window, &lastX, &lastY);
+            firstMouse = true; // следующий кадр будет первым после захвата
         }
     } else {
         if (camera.mouseCaptured) {
+            // Отпускаем захват
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
             camera.mouseCaptured = false;
+            // firstMouse можно не сбрасывать, но оставим для ясности (будет установлено при следующем захвате)
         }
     }
 
-    // Вращение камеры (если захвачена)
+    // Поворот камеры, если мышь захвачена
     if (camera.mouseCaptured) {
         double xpos, ypos;
         glfwGetCursorPos(window, &xpos, &ypos);
-        static double lastX = SCR_WIDTH/2, lastY = SCR_HEIGHT/2;
-        if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
-            double xoffset = xpos - lastX;
-            double yoffset = lastY - ypos; // инвертировано
-            camera.yaw += xoffset * camera.sensitivity;
-            camera.pitch += yoffset * camera.sensitivity;
-            camera.pitch = glm::clamp(camera.pitch, -89.0f, 89.0f);
-            camera.updateVectors();
+
+        // Первый кадр после захвата – просто запоминаем позицию, без поворота
+        if (firstMouse) {
+            lastX = xpos;
+            lastY = ypos;
+            firstMouse = false;
         }
-        lastX = xpos;
-        lastY = ypos;
-    } else {
-        // Сброс последних координат, чтобы не было скачка
-        double xpos, ypos;
-        glfwGetCursorPos(window, &xpos, &ypos);
-        static double lastX = xpos, lastY = ypos;
+
+        double xoffset = xpos - lastX;
+        double yoffset = lastY - ypos; // инвертировано для нормального управления
+
+        camera.yaw += xoffset * camera.sensitivity;
+        camera.pitch += yoffset * camera.sensitivity;
+        camera.pitch = glm::clamp(camera.pitch, -89.0f, 89.0f);
+        camera.updateVectors();
+
         lastX = xpos;
         lastY = ypos;
     }
