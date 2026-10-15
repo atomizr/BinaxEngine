@@ -51,6 +51,12 @@ entt::entity CreateEditorCameraEntity(entt::registry& registry, float aspect)
                                              45.0f, 0.1f, 100.0f, 5.0f,
                                              aspect,
                                              true);
+    // FXAA-поля у CameraComponent берутся из default member initializers:
+    //   FXAAEnabled          = true
+    //   FXAAEdgeThreshold    = 0.063f
+    //   FXAAEdgeThresholdMin = 0.0312f
+    //   FXAASubpixelBlending = 1.0f
+
     registry.emplace<Binax::SystemEntityTag>(e);
     return e;
 }
@@ -277,6 +283,9 @@ int main()
                                            Binax::CameraComponent>();
             }
 
+            // ---- FXAA params pulled from the camera (default: disabled until camera found) ----
+            Binax::FXAAParams frameFXAA{};
+
             // ECS -> EditorCamera (pull settings)
             for (auto entity : cameraView)
             {
@@ -293,6 +302,13 @@ int main()
                 editorCamera.SetMoveSpeed(editorCamComp.MoveSpeed);
                 editorCamera.SetRotationSpeed(editorCamComp.RotationSpeed);
                 editorCamera.SetSpeedMultiplier(editorCamComp.SpeedMultiplier);
+
+                // ---- FXAA (from CameraComponent) ----
+                frameFXAA.Enabled          = camComp.FXAAEnabled;
+                frameFXAA.EdgeThreshold    = camComp.FXAAEdgeThreshold;
+                frameFXAA.EdgeThresholdMin = camComp.FXAAEdgeThresholdMin;
+                frameFXAA.SubpixelBlending = camComp.FXAASubpixelBlending;
+
                 break;
             }
 
@@ -334,7 +350,8 @@ int main()
                                   skyboxParams,
                                   viewport.GetFBO(),
                                   static_cast<uint32_t>(viewport.GetSize().x),
-                                  static_cast<uint32_t>(viewport.GetSize().y));
+                                  static_cast<uint32_t>(viewport.GetSize().y),
+                                  frameFXAA);   // <-- FXAA params
 
             // ---- UI ----
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
