@@ -91,6 +91,9 @@ void DeferredRenderer::InitShaders()
 
     m_LightingShader = Shader::FromFiles(shaderDir + "lighting.vert",
                                          shaderDir + "lighting.frag");
+
+    m_FXAAShader     = Shader::FromFiles(shaderDir + "fxaa.vert",
+                                         shaderDir + "fxaa.frag");   // <-- NEW
 }
 
 void DeferredRenderer::GeometryPass(const Mesh& mesh,
@@ -196,30 +199,55 @@ void DeferredRenderer::EndGeometryPass()
 {
 }
 
+// LightingPass(): если FXAA включён — рендерим в промежуточный FBO,
+// затем одним проходом FXAA переносим в targetFBO.
 void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
                                     const glm::vec3& cameraPosition,
                                     const glm::mat4& invViewProj,
                                     const SkyboxParams& skybox,
                                     uint32_t targetFBO,
                                     uint32_t width,
-                                    uint32_t height)
+                                    uint32_t height,
+                                    const FXAAParams& fxaa)
 {
-    if (targetFBO != 0)
+    const uint32_t targetW = width  ? width  : m_GBuffer->GetWidth();
+    const uint32_t targetH = height ? height : m_GBuffer->GetHeight();
+
+    const bool useFXAA = fxaa.Enabled && m_FXAAShader != nullptr;
+
+    // ---- 1. Готовим промежуточный FBO, если нужен FXAA ----
+    if (useFXAA)
+    {
+        if (!m_LightingFBO)
+        {
+            m_LightingFBO = std::make_unique<Framebuffer>(targetW, targetH);
+            m_LightingFBO->Bind();
+            m_LightingFBO->AttachColorTexture(GL_RGBA8, GL_RGBA,
+                                              GL_UNSIGNED_BYTE, 0);
+            m_LightingFBO->CheckStatus();
+            m_LightingFBO->Unbind();
+        }
+        else
+        {
+            m_LightingFBO->Resize(targetW, targetH);
+        }
+
+        m_LightingFBO->Bind();
+    }
+    else
+    {
         glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
-    else
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
 
-    if (width != 0 && height != 0)
-        glViewport(0, 0, width, height);
-    else
-        glViewport(0, 0, m_GBuffer->GetWidth(), m_GBuffer->GetHeight());
-
+    glViewport(0, 0, static_cast<GLsizei>(targetW),
+                     static_cast<GLsizei>(targetH));
     glClear(GL_COLOR_BUFFER_BIT);
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
     glDepthMask(GL_FALSE);
 
+    // ---- 2. Обычный lighting-пасс (без изменений) ----
     m_GBuffer->BindTextures(0);
 
     m_LightingShader->Bind();
@@ -271,8 +299,52 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
 
     m_LightingShader->Unbind();
 
+    // ---- 3. FXAA-пасс ----
+    if (useFXAA)
+    {
+        ApplyFXAA(m_LightingFBO->GetColorAttachment(0),
+                  targetFBO, targetW, targetH, fxaa);
+    }
+
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
+}
+
+void DeferredRenderer::ApplyFXAA(uint32_t sourceTexture,
+                                 uint32_t targetFBO,
+                                 uint32_t width, uint32_t height,
+                                 const FXAAParams& params)
+{
+    glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
+    glViewport(0, 0, static_cast<GLsizei>(width),
+                     static_cast<GLsizei>(height));
+
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_BLEND);
+
+    // FXAA требует LINEAR-фильтрацию для промежуточных выборок.
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, sourceTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    m_FXAAShader->Bind();
+    m_FXAAShader->SetInt  ("u_ColorTexture",      0);
+    m_FXAAShader->SetVec2 ("u_TexelSize",
+                           glm::vec2(1.0f / static_cast<float>(width),
+                                     1.0f / static_cast<float>(height)));
+    m_FXAAShader->SetFloat("u_EdgeThreshold",     params.EdgeThreshold);
+    m_FXAAShader->SetFloat("u_EdgeThresholdMin",  params.EdgeThresholdMin);
+    m_FXAAShader->SetFloat("u_SubpixelBlending",  params.SubpixelBlending);
+
+    m_FullscreenQuad.Bind();
+    m_FullscreenQuad.Draw();
+    m_FullscreenQuad.Unbind();
+
+    m_FXAAShader->Unbind();
+
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 }
