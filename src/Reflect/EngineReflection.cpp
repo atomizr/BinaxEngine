@@ -29,11 +29,16 @@ BINAX_REFLECT(Binax::CameraComponent)
     info.Add(&CameraComponent::NearPlane,   "Near Plane",  PropertyKind::Float).SetRange(0.001f, 10.0f);
     info.Add(&CameraComponent::FarPlane,    "Far Plane",   PropertyKind::Float).SetRange(1.0f, 10000.0f);
     info.Add(&CameraComponent::OrthoSize,   "Ortho Size",  PropertyKind::Float).SetSpeed(0.1f);
-
     info.Add(&CameraComponent::AspectRatio, "Aspect",      PropertyKind::Float)
         .SetSpeed(0.01f).SetReadOnly().SetTransient();
-
     info.Add(&CameraComponent::Primary,     "Primary",     PropertyKind::Bool);
+    info.Add(&CameraComponent::FXAAEnabled,          "FXAA",                   PropertyKind::Bool);
+    info.Add(&CameraComponent::FXAAEdgeThreshold,    "FXAA Edge Threshold",    PropertyKind::Float)
+        .SetRange(0.0f, 0.5f).SetSpeed(0.001f);
+    info.Add(&CameraComponent::FXAAEdgeThresholdMin, "FXAA Edge Threshold Min",PropertyKind::Float)
+        .SetRange(0.0f, 0.2f).SetSpeed(0.001f);
+    info.Add(&CameraComponent::FXAASubpixelBlending, "FXAA Subpixel Blending", PropertyKind::Float)
+        .SetRange(0.0f, 1.0f);
 }
 
 BINAX_REFLECT(Binax::EditorCameraComponent)
