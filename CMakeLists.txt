@@ -1,157 +1,136 @@
-cmake_minimum_required(VERSION 3.21)
-project(BinaxEngine LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.10)
+project(BinaxEngine VERSION 1.0.0 LANGUAGES CXX C RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
+set(THIRDPARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 
-# Default build type
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
-    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+set(SOURCES
+    src/main.cpp
+    src/Core/Input.cpp
+    src/Core/Timer.cpp
+    src/Core/Window.cpp
+    src/Utils/Log.cpp
+    src/Renderer/DeferredRenderer.cpp
+    src/Renderer/Framebuffer.cpp
+    src/Renderer/GBuffer.cpp
+    src/Renderer/Mesh.cpp
+    src/Renderer/Shader.cpp
+    src/Renderer/Texture.cpp
+    src/Renderer/AssetRegistry.cpp
+    src/Renderer/Cubemap.cpp
+    src/Editor/EditorUI.cpp
+    src/Editor/EditorCamera.cpp
+    src/Editor/Viewport.cpp
+    src/Serialization/SceneSerializer.cpp
+    src/Reflect/Reflection.cpp
+    src/Reflect/ComponentRegistry.cpp
+    src/Reflect/EngineReflection.cpp
+    src/Editor/PropertyWidgets.cpp
+    src/Serialization/PropertySerializer.cpp
+    ${THIRDPARTY_DIR}/glad/src/glad.c
+    ${THIRDPARTY_DIR}/imgui/imgui.cpp
+    ${THIRDPARTY_DIR}/imgui/imgui_draw.cpp
+    ${THIRDPARTY_DIR}/imgui/imgui_tables.cpp
+    ${THIRDPARTY_DIR}/imgui/imgui_widgets.cpp
+    ${THIRDPARTY_DIR}/imgui/ImGuizmo.cpp
+    ${THIRDPARTY_DIR}/imgui/imgui_impl_glfw.cpp
+    ${THIRDPARTY_DIR}/imgui/imgui_impl_opengl3.cpp
+)
+
+# -------------------- WINDOWS RESOURCE (.rc) --------------------
+if (WIN32)
+    set(ICON_FILE_ABSOLUTE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/binax.ico")
+    if (NOT EXISTS "${ICON_FILE_ABSOLUTE}")
+        message(WARNING "Icon not found at ${ICON_FILE_ABSOLUTE} — .exe will use default icon")
+    endif()
+
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/version.rc.in
+        ${CMAKE_CURRENT_BINARY_DIR}/version.rc
+        @ONLY
+    )
+    list(APPEND SOURCES ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 endif()
 
-set(EXTERNAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external")
+add_executable(${PROJECT_NAME} ${SOURCES})
 
-if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(WARNING "This CMake setup expects 64-bit prebuilt GLFW libraries.")
+# -------------------- INCLUDE DIRECTORIES --------------------
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${THIRDPARTY_DIR}
+    ${THIRDPARTY_DIR}/entt
+    ${THIRDPARTY_DIR}/glad/include
+    ${THIRDPARTY_DIR}/glfw/include
+    ${THIRDPARTY_DIR}/glm
+    ${THIRDPARTY_DIR}/imgui
+    ${THIRDPARTY_DIR}/nlohmann
+    ${THIRDPARTY_DIR}/spdlog
+    ${THIRDPARTY_DIR}/stb
+)
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    GLFW_DLL
+    IMGUI_IMPL_OPENGL_LOADER_GLAD
+)
+
+if (WIN32)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
 endif()
 
-if(MSVC)
-    add_compile_options(/utf-8)
-    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/bigobj>)
-    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+# -------------------- ПОДКЛЮЧЕНИЕ БИБЛИОТЕК --------------------
+set(GLFW_LIB_DIR ${THIRDPARTY_DIR}/glfw/lib-vc2022)
+set(GLFW_LIBRARY ${GLFW_LIB_DIR}/glfw3dll.lib)
+
+if (NOT EXISTS ${GLFW_LIBRARY})
+    message(WARNING "GLFW import library not found at ${GLFW_LIBRARY}. Make sure the path is correct.")
 endif()
 
 find_package(OpenGL REQUIRED)
-find_package(Threads REQUIRED)
 
-# ------------------------------------------------------------------------------
-# GLFW (dynamic linking)
-# ------------------------------------------------------------------------------
-set(GLFW_INCLUDE_DIR "${EXTERNAL_DIR}/glfw/include")
+target_link_libraries(${PROJECT_NAME}
+    ${GLFW_LIBRARY}
+    ${OPENGL_LIBRARIES}
+)
+
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${GLFW_LIB_DIR}/glfw3.dll
+        $<TARGET_FILE_DIR:${PROJECT_NAME}>
+    COMMENT "Copying glfw3.dll to output directory"
+)
 
 if(MSVC)
-    set(GLFW_IMPORT_LIBRARY "${EXTERNAL_DIR}/glfw/lib-vc2022/glfw3dll.lib")
-    set(GLFW_RUNTIME_LIBRARY "${EXTERNAL_DIR}/glfw/lib-vc2022/glfw3.dll")
-elseif(MINGW)
-    set(GLFW_IMPORT_LIBRARY "${EXTERNAL_DIR}/glfw/lib-mingw-w64/libglfw3dll.a")
-    set(GLFW_RUNTIME_LIBRARY "${EXTERNAL_DIR}/glfw/lib-mingw-w64/glfw3.dll")
-else()
-    set(GLFW_IMPORT_LIBRARY "${EXTERNAL_DIR}/glfw/lib-vc2022/glfw3dll.lib")
-    set(GLFW_RUNTIME_LIBRARY "${EXTERNAL_DIR}/glfw/lib-vc2022/glfw3.dll")
-endif()
+    # Жесткое отключение RTTI (Обязательно для твоей кастомной рефлексии)
+    string(REPLACE "/GR" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR-")
 
-foreach(_f "${GLFW_INCLUDE_DIR}/GLFW/glfw3.h" "${GLFW_IMPORT_LIBRARY}" "${GLFW_RUNTIME_LIBRARY}")
-    if(NOT EXISTS "${_f}")
-        message(FATAL_ERROR "GLFW file not found: ${_f}")
+    # Убираем дебажную инфу из релизных конфигураций
+    foreach(flag_var
+            CMAKE_C_FLAGS_RELEASE CMAKE_CXX_FLAGS_RELEASE
+            CMAKE_C_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_MINSIZEREL)
+        string(REPLACE "/Zi" "" ${flag_var} "${${flag_var}}")
+        string(REPLACE "/ZI" "" ${flag_var} "${${flag_var}}")
+    endforeach()
+
+    # Агрессивная оптимизация (Без /GL, используем стандартный подход CMake для IPO)
+    set(RE_COMPILER_FLAGS "/O2 /Oi /Ot /Oy /Gw /Gy /GS-")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} ${RE_COMPILER_FLAGS}")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${RE_COMPILER_FLAGS}")
+
+    # Флаги линкера (Без /LTCG, его добавит свойство ниже)
+    set(RE_LINKER_FLAGS "/DEBUG:NONE /OPT:REF /OPT:ICF /MANIFEST:NO")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} ${RE_LINKER_FLAGS}")
+
+    # Включаем Link Time Code Generation (LTCG / IPO) правильным способом CMake
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT ipo_supported OUTPUT error)
+    if(ipo_supported)
+        set_property(TARGET ${PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
     endif()
-endforeach()
 
-add_library(binax_glfw SHARED IMPORTED GLOBAL)
-set_target_properties(binax_glfw PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${GLFW_INCLUDE_DIR}"
-    INTERFACE_COMPILE_DEFINITIONS "GLFW_DLL;GLFW_INCLUDE_NONE"
-    IMPORTED_LOCATION "${GLFW_RUNTIME_LIBRARY}"
-    IMPORTED_IMPLIB "${GLFW_IMPORT_LIBRARY}"
-)
-set_property(TARGET binax_glfw APPEND PROPERTY INTERFACE_LINK_LIBRARIES OpenGL::GL)
-
-# ------------------------------------------------------------------------------
-# GLAD
-# ------------------------------------------------------------------------------
-add_library(binax_glad STATIC "${EXTERNAL_DIR}/glad/src/glad.c")
-target_include_directories(binax_glad PUBLIC "${EXTERNAL_DIR}/glad/include")
-set_property(TARGET binax_glad APPEND PROPERTY INTERFACE_LINK_LIBRARIES OpenGL::GL)
-
-# ------------------------------------------------------------------------------
-# pugixml
-# ------------------------------------------------------------------------------
-add_library(binax_pugixml STATIC "${EXTERNAL_DIR}/xml/pugixml.cpp")
-target_include_directories(binax_pugixml PUBLIC "${EXTERNAL_DIR}/xml")
-
-# ------------------------------------------------------------------------------
-# Header-only dependencies: EnTT, GLM, nlohmann/json, spdlog, stb, toml, MINIAUDIO
-# ------------------------------------------------------------------------------
-add_library(binax_headers INTERFACE)
-target_include_directories(binax_headers INTERFACE
-    "${EXTERNAL_DIR}"                # entt/, glm/, nlohmann/, spdlog/
-    "${EXTERNAL_DIR}/toml"           # toml.hpp
-    "${EXTERNAL_DIR}/stb"            # stb_image.h
-    "${EXTERNAL_DIR}/miniaudio"      # miniaudio.h
-)
-target_link_libraries(binax_headers INTERFACE Threads::Threads)
-
-# ------------------------------------------------------------------------------
-# Dear ImGui + backend + ImGuizmo
-# ------------------------------------------------------------------------------
-add_library(binax_imgui STATIC
-    "${EXTERNAL_DIR}/imgui/imgui.cpp"
-    "${EXTERNAL_DIR}/imgui/imgui_demo.cpp"
-    "${EXTERNAL_DIR}/imgui/imgui_draw.cpp"
-    "${EXTERNAL_DIR}/imgui/imgui_tables.cpp"
-    "${EXTERNAL_DIR}/imgui/imgui_widgets.cpp"
-    "${EXTERNAL_DIR}/imgui/imgui_impl_glfw.cpp"
-    "${EXTERNAL_DIR}/imgui/imgui_impl_opengl3.cpp"
-    "${EXTERNAL_DIR}/imgui/ImGuizmo.cpp"
-)
-target_include_directories(binax_imgui PUBLIC "${EXTERNAL_DIR}/imgui")
-target_compile_definitions(binax_imgui PUBLIC
-    IMGUI_IMPL_OPENGL_LOADER_GLAD
-    IMGUI_DEFINE_MATH_OPERATORS
-)
-target_link_libraries(binax_imgui PUBLIC
-    binax_headers
-    binax_glad
-    binax_glfw
-    OpenGL::GL
-)
-
-# ------------------------------------------------------------------------------
-# Main engine interface target
-# ------------------------------------------------------------------------------
-add_library(BinaxEngine INTERFACE)
-target_link_libraries(BinaxEngine INTERFACE
-    binax_headers
-    binax_glad
-    binax_glfw
-    binax_imgui
-    binax_pugixml
-    OpenGL::GL
-    Threads::Threads
-)
-
-# ------------------------------------------------------------------------------
-# Test executable
-# ------------------------------------------------------------------------------
-add_executable(BinaxTest main.cpp)
-set_target_properties(BinaxTest PROPERTIES
-    OUTPUT_NAME "BinaxEngine"
-    VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:BinaxTest>"
-)
-target_link_libraries(BinaxTest PRIVATE BinaxEngine)
-
-if(MINGW)
-    target_link_options(BinaxTest PRIVATE
-        -static-libgcc
-        -static-libstdc++
-        -Wl,--enable-auto-import
-    )
+    # ЖЕСТКОЕ ПОДАВЛЕНИЕ КОНФЛИКТА APIENTRY (C4005) НАПРЯМУЮ ДЛЯ ТАРГЕТА ДВИЖКА
+    target_compile_options(${PROJECT_NAME} PRIVATE /wd4005)
 endif()
-
-set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT BinaxTest)
-
-# ------------------------------------------------------------------------------
-# Copy GLFW DLL next to test.exe
-# ------------------------------------------------------------------------------
-add_custom_command(TARGET BinaxTest POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${GLFW_RUNTIME_LIBRARY}"
-            $<TARGET_FILE_DIR:BinaxTest>
-    COMMENT "Copying GLFW runtime DLL"
-    VERBATIM
-)
