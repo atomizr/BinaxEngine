@@ -6,18 +6,6 @@
 
 namespace Binax {
 
-
-
-
-
-
-
-
-
-
-
-
-
 struct SceneEntityMap
 {
     std::unordered_map<int, entt::entity> ByLocalId;
