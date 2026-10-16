@@ -32,12 +32,14 @@ BINAX_REFLECT(Binax::CameraComponent)
     info.Add(&CameraComponent::AspectRatio, "Aspect",      PropertyKind::Float)
         .SetSpeed(0.01f).SetReadOnly().SetTransient();
     info.Add(&CameraComponent::Primary,     "Primary",     PropertyKind::Bool);
-    info.Add(&CameraComponent::FXAAEnabled,          "FXAA",                   PropertyKind::Bool);
-    info.Add(&CameraComponent::FXAAEdgeThreshold,    "FXAA Edge Threshold",    PropertyKind::Float)
+
+    // ---- Post-processing ----
+    info.Add(&CameraComponent::FXAAEnabled,          "FXAA",                    PropertyKind::Bool);
+    info.Add(&CameraComponent::FXAAEdgeThreshold,    "FXAA Edge Threshold",     PropertyKind::Float)
         .SetRange(0.0f, 0.5f).SetSpeed(0.001f);
-    info.Add(&CameraComponent::FXAAEdgeThresholdMin, "FXAA Edge Threshold Min",PropertyKind::Float)
+    info.Add(&CameraComponent::FXAAEdgeThresholdMin, "FXAA Edge Threshold Min", PropertyKind::Float)
         .SetRange(0.0f, 0.2f).SetSpeed(0.001f);
-    info.Add(&CameraComponent::FXAASubpixelBlending, "FXAA Subpixel Blending", PropertyKind::Float)
+    info.Add(&CameraComponent::FXAASubpixelBlending, "FXAA Subpixel Blending",  PropertyKind::Float)
         .SetRange(0.0f, 1.0f);
 }
 
@@ -64,51 +66,16 @@ BINAX_REFLECT(Binax::LightComponent)
 
 BINAX_REFLECT(Binax::MeshComponent)
 {
+    // MeshId сериализуется, но транзиентно — реальное значение
+    // восстанавливается через MeshName в SceneSerializer.
+    info.Add(&MeshComponent::MeshId, "Mesh Id", PropertyKind::UInt)
+        .SetReadOnly().SetTransient();
 }
 
 BINAX_REFLECT(Binax::MaterialComponent)
 {
-    // ---- Scalar params ----
-    info.Add(&MaterialComponent::Albedo,    "Albedo",    PropertyKind::Color3);
-    info.Add(&MaterialComponent::Metallic,  "Metallic",  PropertyKind::Float).SetRange(0.0f, 1.0f);
-    info.Add(&MaterialComponent::Roughness, "Roughness", PropertyKind::Float).SetRange(0.04f, 1.0f);
-    info.Add(&MaterialComponent::AO,        "AO",        PropertyKind::Float).SetRange(0.0f, 1.0f);
-    info.Add(&MaterialComponent::Emissive,  "Emissive",  PropertyKind::Float).SetRange(0.0f, 5.0f);
-
-    // ---- Albedo ----
-    info.Add(&MaterialComponent::AlbedoMapPath,  "Albedo Map",       PropertyKind::Asset).SetAssetType("Texture");
-    info.Add(&MaterialComponent::AlbedoStrength, "Albedo Strength",  PropertyKind::Float).SetRange(0.0f, 10.0f);
-
-    // ---- Normal ----
-    info.Add(&MaterialComponent::NormalMapPath,  "Normal Map",       PropertyKind::Asset).SetAssetType("Texture");
-    info.Add(&MaterialComponent::NormalStrength, "Normal Strength",  PropertyKind::Float).SetRange(0.0f, 10.0f);
-
-    // ---- Metallic ----
-    info.Add(&MaterialComponent::MetallicMapPath,  "Metallic Map",      PropertyKind::Asset).SetAssetType("Texture");
-    info.Add(&MaterialComponent::MetallicStrength, "Metallic Strength", PropertyKind::Float).SetRange(0.0f, 10.0f);
-
-    // ---- Roughness ----
-    info.Add(&MaterialComponent::RoughnessMapPath,  "Roughness Map",      PropertyKind::Asset).SetAssetType("Texture");
-    info.Add(&MaterialComponent::RoughnessStrength, "Roughness Strength", PropertyKind::Float).SetRange(0.0f, 10.0f);
-
-    // ---- AO ----
-    info.Add(&MaterialComponent::AOMapPath,  "AO Map",       PropertyKind::Asset).SetAssetType("Texture");
-    info.Add(&MaterialComponent::AOStrength, "AO Strength",  PropertyKind::Float).SetRange(0.0f, 10.0f);
-
-    // ---- Emissive ----
-    info.Add(&MaterialComponent::EmissiveMapPath,  "Emissive Map",      PropertyKind::Asset).SetAssetType("Texture");
-    info.Add(&MaterialComponent::EmissiveStrength, "Emissive Strength", PropertyKind::Float).SetRange(0.0f, 10.0f);
-
-    // ---- Tiling ----
-    info.Add(&MaterialComponent::Tiling, "Tiling", PropertyKind::Float).SetRange(0.01f, 20.0f);
-
-    // ---- Skybox reflections ----
-    info.Add(&MaterialComponent::SkyReflectionsEnabled,
-             "Sky Reflections", PropertyKind::Bool);
-
-    info.Add(&MaterialComponent::SkyReflectionStrength,
-             "Sky Reflection Strength", PropertyKind::Float)
-        .SetRange(0.0f, 5.0f);
+    info.Add(&MaterialComponent::MaterialId, "Material Id", PropertyKind::UInt)
+        .SetReadOnly().SetTransient();
 }
 
 BINAX_REFLECT(Binax::SkyboxComponent)
@@ -143,9 +110,9 @@ void RegisterEngineComponents()
     cr.Register<MaterialComponent>     ("Material");
     cr.Register<LightComponent>        ("Light Component");
     cr.Register<CameraComponent>       ("Camera Component");
-    cr.Register<NameComponent>         ("Name",                    true,  false);
-    cr.Register<EditorCameraComponent> ("EditorCameraComponent",   true,  true);
-    cr.Register<SkyboxComponent>("Skybox");
+    cr.Register<NameComponent>         ("Name",                  true,  false);
+    cr.Register<EditorCameraComponent> ("EditorCameraComponent", true,  true);
+    cr.Register<SkyboxComponent>       ("Skybox");
 }
 
 }
