@@ -1,14 +1,12 @@
 #pragma once
 
-#include "Renderer/Mesh.h"
+#include "Renderer/MeshLibrary.h"
 
 namespace Binax {
 
 struct MeshComponent
 {
-    const Mesh* MeshPtr = nullptr;
-    // Параметры материала переехали в MaterialComponent.
-    // MeshComponent теперь отвечает только за геометрию.
+    MeshHandle MeshId = kInvalidMesh;
 };
 
 }
