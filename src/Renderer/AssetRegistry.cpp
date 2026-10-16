@@ -1,6 +1,8 @@
 #include "AssetRegistry.h"
 #include "Utils/Log.h"
 
+#include <glad/glad.h>
+
 namespace Binax {
 
 AssetRegistry& AssetRegistry::Get()
@@ -36,8 +38,55 @@ const Texture* AssetRegistry::GetTexture(const std::string& path, bool srgb)
     return raw;
 }
 
+TextureHandle AssetRegistry::GetTextureHandle(const std::string& path, bool srgb)
+{
+    if (path.empty())
+        return kInvalidTextureHandle;
+
+    auto it = m_Handles.find(path);
+    if (it != m_Handles.end())
+        return it->second;
+
+    if (!GLAD_GL_ARB_bindless_texture)
+    {
+        BINAX_LOG_WARN("AssetRegistry: bindless texture unsupported — "
+                       "texture '{}' will be ignored", path);
+        m_Handles[path] = kInvalidTextureHandle;
+        return kInvalidTextureHandle;
+    }
+
+    const Texture* tex = GetTexture(path, srgb);
+    if (!tex || !tex->GetID())
+    {
+        m_Handles[path] = kInvalidTextureHandle;
+        return kInvalidTextureHandle;
+    }
+
+    GLuint64 h = glGetTextureHandleARB(tex->GetID());
+    if (h != 0 && !glIsTextureHandleResidentARB(h))
+        glMakeTextureHandleResidentARB(h);
+
+    m_Handles[path] = (TextureHandle)h;
+    BINAX_LOG_INFO("AssetRegistry: bindless handle for '{}' = {}", path,
+                   (unsigned long long)h);
+    return m_Handles[path];
+}
+
 void AssetRegistry::ReloadTexture(const std::string& path)
 {
+    // Сначала сбросить resident-handle, если был
+    auto hit = m_Handles.find(path);
+    if (hit != m_Handles.end())
+    {
+        if (hit->second != kInvalidTextureHandle && GLAD_GL_ARB_bindless_texture)
+        {
+            GLuint64 h = (GLuint64)hit->second;
+            if (glIsTextureHandleResidentARB(h))
+                glMakeTextureHandleNonResidentARB(h);
+        }
+        m_Handles.erase(hit);
+    }
+
     m_Failed.erase(path);
     m_Textures.erase(path);
 }
@@ -92,10 +141,26 @@ void AssetRegistry::ReloadCubemap(const std::array<std::string, 6>& paths)
 
 void AssetRegistry::Clear()
 {
+    // Release bindless resident handles first — textures могут быть удалены
+    if (GLAD_GL_ARB_bindless_texture)
+    {
+        for (auto& [path, h] : m_Handles)
+        {
+            if (h != kInvalidTextureHandle)
+            {
+                GLuint64 raw = (GLuint64)h;
+                if (glIsTextureHandleResidentARB(raw))
+                    glMakeTextureHandleNonResidentARB(raw);
+            }
+        }
+    }
+    m_Handles.clear();
+
     m_Textures.clear();
     m_Failed.clear();
+
     m_Cubemaps.clear();
     m_FailedCubemaps.clear();
 }
 
-}
+} // namespace Binax
