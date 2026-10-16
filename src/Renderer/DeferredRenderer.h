@@ -1,16 +1,21 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <vector>
-#include <cstdint>
 #include <glm/glm.hpp>
-#include "GBuffer.h"
-#include "Framebuffer.h"      // <-- NEW
-#include "Shader.h"
-#include "Mesh.h"
-#include "GPULight.h"
-#include "Cubemap.h"
-#include "ECS/Components/MaterialComponent.h"
+
+#include "Renderer/Cubemap.h"
+#include "Renderer/DrawCommand.h"
+#include "Renderer/Framebuffer.h"
+#include "Renderer/GBuffer.h"
+#include "Renderer/GPULight.h"
+#include "Renderer/InstanceBuffer.h"
+#include "Renderer/MaterialLibrary.h"
+#include "Renderer/MeshLibrary.h"
+#include "Renderer/Shader.h"
+
+#include "ECS/Systems/RenderSystem.h"
 
 namespace Binax {
 
@@ -21,7 +26,6 @@ struct SkyboxParams
     float Brightness          = 1.0f;
 };
 
-// <-- NEW
 struct FXAAParams
 {
     bool  Enabled            = false;
@@ -46,11 +50,9 @@ public:
     void Resize(uint32_t width, uint32_t height);
     void ClearGBuffer();
 
-    void GeometryPass(const Mesh& mesh,
-                      const glm::mat4& modelMatrix,
+    void GeometryPass(FrameRenderData& frame,
                       const glm::mat4& viewMatrix,
-                      const glm::mat4& projectionMatrix,
-                      const MaterialComponent& material);
+                      const glm::mat4& projectionMatrix);
 
     void LightingPass(const std::vector<GPULight>& lights,
                       const glm::vec3& cameraPosition,
@@ -59,12 +61,9 @@ public:
                       uint32_t targetFBO = 0,
                       uint32_t width = 0,
                       uint32_t height = 0,
-                      const FXAAParams& fxaa = {});   // <-- NEW
-
-    void EndGeometryPass();
+                      const FXAAParams& fxaa = {});
 
     const GBuffer& GetGBuffer() const { return *m_GBuffer; }
-
     const FrameStats& GetFrameStats() const { return m_FrameStats; }
     void ResetFrameStats() { m_FrameStats = {}; }
 
@@ -72,19 +71,27 @@ private:
     std::unique_ptr<GBuffer>     m_GBuffer;
     std::unique_ptr<Shader>      m_GeometryShader;
     std::unique_ptr<Shader>      m_LightingShader;
-    std::unique_ptr<Shader>      m_FXAAShader;      // <-- NEW
-    std::unique_ptr<Framebuffer> m_LightingFBO;     // <-- NEW (когда FXAA включён)
-    Mesh m_FullscreenQuad;
+    std::unique_ptr<Shader>      m_FXAAShader;
+    std::unique_ptr<Framebuffer> m_LightingFBO;
+
+    MeshHandle m_QuadHandle = kInvalidMesh;
+
+    uint32_t m_DrawIndirectSSBO = 0;
+    uint32_t m_DrawMetaSSBO     = 0;
+    uint32_t m_BonesDummySSBO   = 0;
+    uint32_t m_DrawCapacity     = 0;
 
     FrameStats m_FrameStats;
 
     void InitShaders();
+    void EnsureQuad();
+    void EnsureDrawBuffers(uint32_t drawCount);
+    void DrawFullscreenQuad();
 
-    // <-- NEW
     void ApplyFXAA(uint32_t sourceTexture,
                    uint32_t targetFBO,
                    uint32_t width, uint32_t height,
                    const FXAAParams& params);
 };
 
-}
+} // namespace Binax
