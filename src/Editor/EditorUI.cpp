@@ -14,22 +14,44 @@
 #include "ECS/Components/NameComponent.h"
 #include "ECS/Components/EditorCameraComponent.h"
 #include "ECS/Components/SystemEntityTag.h"
+#include "ECS/Components/SkyboxComponent.h"
 #include "Renderer/Mesh.h"
+#include "Renderer/MeshLibrary.h"
+#include "Renderer/MaterialLibrary.h"
 #include "Utils/Log.h"
 #include "Serialization/SceneSerializer.h"
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <fstream>
 #include <glm/gtx/matrix_decompose.hpp>
+#include <filesystem>
+#include <fstream>
 #include "ImGuizmo.h"
 #include "imgui_internal.h"
-#include <iostream>
 #include "Reflect/Reflection.h"
 #include "Reflect/ComponentRegistry.h"
 #include "Reflect/EngineReflection.h"
 #include "Editor/PropertyWidgets.h"
 #include "Serialization/PropertySerializer.h"
-#include "ECS/Components/SkyboxComponent.h"
+
+namespace {
+
+// [FIX] Безопасное преобразование path → UTF-8 std::string.
+//       .string() на MSVC может бросить std::system_error 1113
+//       "No mapping for the Unicode character..." на путях с
+//       кириллицей/эмодзи при не-соответствующей ANSI-кодировке.
+std::string PathToUtf8(const std::filesystem::path& p)
+{
+    const auto u8 = p.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+std::filesystem::path PathFromUtf8(const std::string& s)
+{
+    return std::filesystem::path(
+        std::u8string(reinterpret_cast<const char8_t*>(s.data()), s.size()));
+}
+
+} // namespace
 
 namespace Binax {
 
@@ -40,7 +62,6 @@ EditorUI::EditorUI(GLFWwindow* window, entt::registry& registry)
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
     io.ConfigWindowsMoveFromTitleBarOnly = true;
 
     ApplyQtGrayStyle();
@@ -63,6 +84,10 @@ void EditorUI::InitComponentFactory()
 {
     Reflect::RegisterEngineComponents();
 }
+
+// ---------------------------------------------------------------------------
+// Component add / remove
+// ---------------------------------------------------------------------------
 
 void EditorUI::AddComponentToEntity(entt::entity entity, const std::string& componentName)
 {
@@ -118,6 +143,10 @@ void EditorUI::RemoveComponentFromEntity(entt::entity entity, const std::string&
     BINAX_LOG_INFO("Removed '{}' from entity {}", componentName, (uint32_t)entity);
 }
 
+// ---------------------------------------------------------------------------
+// Scene IO
+// ---------------------------------------------------------------------------
+
 void EditorUI::SaveScene()
 {
     SceneSerializer::Serialize(m_Registry, "scene.json");
@@ -127,21 +156,18 @@ void EditorUI::LoadScene()
 {
     m_SelectedEntity = entt::null;
 
+    // Сбрасываем material editor: handle'ы старой сцены могут стать
+    // невалидными после перезагрузки.
+    m_EditingMaterial    = kInvalidMaterial;
+    m_ShowMaterialEditor = false;
+
     if (!SceneSerializer::Deserialize(m_Registry, "scene.json"))
     {
-        BINAX_LOG_WARN("Scene load failed — registry left unchanged (or partially loaded)");
+        BINAX_LOG_WARN("Scene load failed — registry left unchanged");
         return;
     }
 
-    auto meshView = m_Registry.view<MeshComponent>();
-    for (auto entity : meshView)
-    {
-        auto& meshComp = meshView.get<MeshComponent>(entity);
-        if (meshComp.MeshPtr == nullptr)
-            meshComp.MeshPtr = m_CubeMesh;
-    }
-
-    // ---- Восстанавливаем Skybox, если он был утерян ----
+    // Восстанавливаем Skybox, если он был утерян
     {
         auto skyView = m_Registry.view<SkyboxComponent>();
         if (skyView.begin() == skyView.end())
@@ -153,8 +179,12 @@ void EditorUI::LoadScene()
         }
     }
 
-    BINAX_LOG_INFO("Scene loaded (mesh pointers restored)");
+    BINAX_LOG_INFO("Scene loaded");
 }
+
+// ---------------------------------------------------------------------------
+// Entity ops
+// ---------------------------------------------------------------------------
 
 void EditorUI::DeleteEntity(entt::entity entity)
 {
@@ -168,22 +198,22 @@ void EditorUI::DeleteEntity(entt::entity entity)
         BINAX_LOG_WARN("Cannot delete Skybox entity");
         return;
     }
-
     if (!m_Registry.valid(entity))
     {
-        BINAX_LOG_WARN("Entity {0} is not valid", static_cast<uint32_t>(entity));
+        BINAX_LOG_WARN("Entity {0} is not valid", (uint32_t)entity);
         return;
     }
 
     BINAX_LOG_INFO("Deleting entity {0} (name: {1})",
-                   static_cast<uint32_t>(entity),
-                   GetEntityName(entity));
+                   (uint32_t)entity, GetEntityName(entity));
 
-    uint32_t id = static_cast<uint32_t>(entity);
-    m_Registry.destroy(entity);
+    uint32_t id = (uint32_t)entity;
 
+    // Сравнение делаем ДО destroy — на случай переиспользования handle.
     if (m_SelectedEntity == entity)
         m_SelectedEntity = entt::null;
+
+    m_Registry.destroy(entity);
 
     BINAX_LOG_INFO("Entity {0} destroyed", id);
 }
@@ -197,19 +227,17 @@ std::string EditorUI::GetEntityName(entt::entity entity) const
 {
     if (m_Registry.any_of<NameComponent>(entity))
         return m_Registry.get<NameComponent>(entity).Name;
-    else
-        return "Entity " + std::to_string(static_cast<uint32_t>(entity));
+    return "Entity " + std::to_string((uint32_t)entity);
 }
 
 void EditorUI::HandleShortcuts()
 {
-    if (ImGui::GetIO().WantTextInput)
-        return;
+    if (ImGui::GetIO().WantTextInput) return;
 
-    const bool ctrlPressed = Input::IsKeyPressed(GLFW_KEY_LEFT_CONTROL) ||
-                             Input::IsKeyPressed(GLFW_KEY_RIGHT_CONTROL);
+    const bool ctrl = Input::IsKeyPressed(GLFW_KEY_LEFT_CONTROL) ||
+                      Input::IsKeyPressed(GLFW_KEY_RIGHT_CONTROL);
 
-    if (ctrlPressed && Input::IsKeyJustPressed(GLFW_KEY_D))
+    if (ctrl && Input::IsKeyJustPressed(GLFW_KEY_D))
     {
         if (m_SelectedEntity != entt::null && m_Registry.valid(m_SelectedEntity))
             DuplicateEntity(m_SelectedEntity);
@@ -221,6 +249,10 @@ void EditorUI::HandleShortcuts()
             DeleteEntity(m_SelectedEntity);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Main draw
+// ---------------------------------------------------------------------------
 
 void EditorUI::Draw()
 {
@@ -236,24 +268,27 @@ void EditorUI::Draw()
     DrawHierarchy();
     DrawInspector();
 
+    if (m_ShowMaterialEditor && m_EditingMaterial != kInvalidMaterial)
+        DrawMaterialEditor();
+
     PropertyWidgets::DrawFileBrowser();
 
-    // ---- Пользовательские панели, зарегистрированные извне (Stats и др.) ----
     for (auto& cb : m_ExtraPanelDrawers)
-    {
         if (cb) cb();
-    }
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
+
+// ---------------------------------------------------------------------------
+// Viewport + Gizmo
+// ---------------------------------------------------------------------------
 
 void EditorUI::DrawViewport()
 {
     if (!m_Viewport) return;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar
                            | ImGuiWindowFlags_NoScrollWithMouse
                            | ImGuiWindowFlags_NoMove
@@ -273,17 +308,16 @@ void EditorUI::DrawViewport()
 
         if (vpSize.x > 0 && vpSize.y > 0)
         {
-            if (static_cast<uint32_t>(vpSize.x) != m_Viewport->GetSize().x ||
-                static_cast<uint32_t>(vpSize.y) != m_Viewport->GetSize().y)
+            if ((uint32_t)vpSize.x != (uint32_t)m_Viewport->GetSize().x ||
+                (uint32_t)vpSize.y != (uint32_t)m_Viewport->GetSize().y)
             {
-                m_Viewport->Resize(static_cast<uint32_t>(vpSize.x),
-                                   static_cast<uint32_t>(vpSize.y));
+                m_Viewport->Resize((uint32_t)vpSize.x, (uint32_t)vpSize.y);
             }
         }
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->AddImage(
-            reinterpret_cast<ImTextureID>(static_cast<intptr_t>(m_Viewport->GetTextureID())),
+            reinterpret_cast<ImTextureID>((intptr_t)m_Viewport->GetTextureID()),
             vpPos,
             ImVec2(vpPos.x + vpSize.x, vpPos.y + vpSize.y),
             ImVec2(0.0f, 1.0f),
@@ -354,28 +388,28 @@ void EditorUI::DrawGizmo()
         case 1: op = ImGuizmo::ROTATE;    break;
         case 2: op = ImGuizmo::SCALE;     break;
     }
-    const ImGuizmo::MODE mode = (m_GizmoMode == 0) ? ImGuizmo::WORLD
-                                                   : ImGuizmo::LOCAL;
+    const ImGuizmo::MODE mode = (m_GizmoMode == 0) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
 
     const bool manipulated = ImGuizmo::Manipulate(
         glm::value_ptr(m_ViewMatrix),
         glm::value_ptr(m_ProjectionMatrix),
-        op, mode,
-        glm::value_ptr(model));
+        op, mode, glm::value_ptr(model));
 
     if (manipulated)
     {
         glm::vec3 translation, scale, skew;
         glm::vec4 perspective;
         glm::quat rotation;
-
         glm::decompose(model, scale, rotation, translation, skew, perspective);
-
         transform.Position = translation;
         transform.Rotation = rotation;
         transform.Scale    = scale;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Hierarchy / Inspector
+// ---------------------------------------------------------------------------
 
 void EditorUI::DrawCreateObjectDropdown()
 {
@@ -384,10 +418,8 @@ void EditorUI::DrawCreateObjectDropdown()
 
     if (ImGui::BeginPopup("CreateObjectPopup"))
     {
-        if (ImGui::MenuItem("Empty Object"))
-            CreateEmptyEntity();
-        if (ImGui::MenuItem("3D Cube"))
-            CreateCubeEntity();
+        if (ImGui::MenuItem("Empty Object")) CreateEmptyEntity();
+        if (ImGui::MenuItem("3D Cube"))      CreateCubeEntity();
         ImGui::EndPopup();
     }
 }
@@ -403,8 +435,6 @@ void EditorUI::DrawHierarchy()
     DrawCreateObjectDropdown();
     ImGui::Separator();
 
-    // View по NameComponent покрывает и обычные сущности, и Skybox (у него есть Name).
-    // Fallback — если у сущности нет имени, используем её entity id.
     auto view = m_Registry.view<NameComponent>();
     for (auto entity : view)
     {
@@ -414,7 +444,7 @@ void EditorUI::DrawHierarchy()
         bool isSkybox   = m_Registry.any_of<SkyboxComponent>(entity);
         bool isProtected = isCamera || isSkybox;
 
-        ImGui::PushID(static_cast<int>(entity));
+        ImGui::PushID((int)entity);
         if (ImGui::Selectable(label.c_str(), &isSelected))
             m_SelectedEntity = entity;
 
@@ -459,13 +489,11 @@ void EditorUI::DrawInspector()
         if (!entry.Has(m_Registry, m_SelectedEntity)) continue;
 
         ImGui::PushID(entry.TypeId);
-
         ImGui::TextUnformatted(entry.Name.c_str());
 
         const bool isTransform = (entry.Name == "Transform");
         const bool isName      = (entry.Name == "Name");
-        const bool canRemove   = !isCamera && !isSkybox
-                              && !isTransform && !isName;
+        const bool canRemove   = !isCamera && !isSkybox && !isTransform && !isName;
 
         if (canRemove)
         {
@@ -484,18 +512,31 @@ void EditorUI::DrawInspector()
                 PropertyWidgets::Draw(obj, prop);
         }
 
+        if (entry.Name == "Material" &&
+            m_Registry.any_of<MaterialComponent>(m_SelectedEntity))
+        {
+            auto h = m_Registry.get<MaterialComponent>(m_SelectedEntity).MaterialId;
+            if (h != kInvalidMaterial)
+            {
+                ImGui::Text("Name: %s", MaterialLibrary::Get().GetName(h).c_str());
+                if (ImGui::SmallButton("Edit Material..."))
+                {
+                    m_EditingMaterial = h;
+                    m_ShowMaterialEditor = true;
+                }
+            }
+        }
+
         ImGui::Unindent();
         ImGui::Separator();
         ImGui::PopID();
 
-        if (!pendingRemove.empty())
-            break;
+        if (!pendingRemove.empty()) break;
     }
 
     if (!pendingRemove.empty())
         RemoveComponentFromEntity(m_SelectedEntity, pendingRemove);
 
-    // Skybox тоже не должен получать «Add Component» (защита консистентности)
     if (!isCamera && !isSkybox)
         DrawAddComponentMenu();
 
@@ -514,8 +555,6 @@ void EditorUI::DrawAddComponentMenu()
             const auto& entry = *entryPtr;
             if (entry.Hidden) continue;
             if (entry.Has(m_Registry, m_SelectedEntity)) continue;
-
-            // Skybox и EditorCameraComponent нельзя добавлять к произвольным сущностям
             if (entry.Name == "Skybox") continue;
             if (entry.Name == "EditorCameraComponent") continue;
 
@@ -526,20 +565,143 @@ void EditorUI::DrawAddComponentMenu()
     }
 }
 
+// ---------------------------------------------------------------------------
+// Material editor
+// ---------------------------------------------------------------------------
+
+void EditorUI::DrawMaterialEditor()
+{
+    if (m_EditingMaterial == kInvalidMaterial)
+    {
+        m_ShowMaterialEditor = false;
+        return;
+    }
+
+    std::string title = "Material: " + MaterialLibrary::Get().GetName(m_EditingMaterial);
+
+    bool open = true;
+    ImGui::SetNextWindowSize(ImVec2(480, 620), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin(title.c_str(), &open))
+    {
+        MaterialGPU&  m  = MaterialLibrary::Get().GetMutable(m_EditingMaterial);
+        const auto&   ed = MaterialLibrary::Get().GetEdit(m_EditingMaterial);
+        const MaterialHandle h = m_EditingMaterial;
+
+        if (ImGui::CollapsingHeader("Base", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            if (ImGui::ColorEdit3("Albedo", &m.AlbedoRoughness.x))
+                MaterialLibrary::Get().MarkDirty();
+            if (ImGui::SliderFloat("Roughness", &m.AlbedoRoughness.w, 0.04f, 1.0f))
+                MaterialLibrary::Get().MarkDirty();
+            if (ImGui::SliderFloat("Metallic",  &m.MetallicAOEms.x,   0.0f, 1.0f))
+                MaterialLibrary::Get().MarkDirty();
+            if (ImGui::SliderFloat("AO",        &m.MetallicAOEms.y,   0.0f, 1.0f))
+                MaterialLibrary::Get().MarkDirty();
+            if (ImGui::SliderFloat("Emissive",  &m.MetallicAOEms.z,   0.0f, 5.0f))
+                MaterialLibrary::Get().MarkDirty();
+            if (ImGui::SliderFloat("Tiling",    &m.MetallicAOEms.w,   0.01f, 20.0f))
+                MaterialLibrary::Get().MarkDirty();
+        }
+
+        if (ImGui::CollapsingHeader("Sky reflections"))
+        {
+            bool skyEn = (m.SkyReflParams.x > 0.5f);
+            if (ImGui::Checkbox("Enabled", &skyEn))
+            {
+                m.SkyReflParams.x = skyEn ? 1.0f : 0.0f;
+                MaterialLibrary::Get().MarkDirty();
+            }
+            if (ImGui::SliderFloat("Strength", &m.SkyReflParams.y, 0.0f, 5.0f))
+                MaterialLibrary::Get().MarkDirty();
+        }
+
+        if (ImGui::CollapsingHeader("Strengths"))
+        {
+            if (ImGui::SliderFloat("Albedo Str",    &m.StrengthB.x, 0.0f, 10.0f)) MaterialLibrary::Get().MarkDirty();
+            if (ImGui::SliderFloat("Normal Str",    &m.StrengthB.y, 0.0f, 10.0f)) MaterialLibrary::Get().MarkDirty();
+            if (ImGui::SliderFloat("Metallic Str",  &m.StrengthA.x, 0.0f, 10.0f)) MaterialLibrary::Get().MarkDirty();
+            if (ImGui::SliderFloat("Roughness Str", &m.StrengthA.y, 0.0f, 10.0f)) MaterialLibrary::Get().MarkDirty();
+            if (ImGui::SliderFloat("AO Str",        &m.StrengthA.z, 0.0f, 10.0f)) MaterialLibrary::Get().MarkDirty();
+            if (ImGui::SliderFloat("Emissive Str",  &m.StrengthA.w, 0.0f, 10.0f)) MaterialLibrary::Get().MarkDirty();
+        }
+
+        if (ImGui::CollapsingHeader("Textures", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            auto TextureRow = [&](const char* label,
+                                  const std::string& currentPath,
+                                  std::function<void(const std::string&)> setter)
+            {
+                ImGui::PushID(label);
+
+                ImGui::Text("%s", label);
+                ImGui::SameLine(110.0f);
+
+std::string display = currentPath.empty()
+    ? "(none)"
+    : PathToUtf8(PathFromUtf8(currentPath).filename());
+                ImGui::TextWrapped("%s", display.c_str());
+                ImGui::SameLine();
+
+                if (ImGui::SmallButton("..."))
+                {
+                    PropertyWidgets::OpenFileBrowser(
+                        std::string("Select ") + label,
+                        { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" },
+                        [setter](const std::string& path) { setter(path); });
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("X") && !currentPath.empty())
+                    setter("");
+
+                ImGui::PopID();
+            };
+
+            TextureRow("Albedo", ed.AlbedoMapPath,
+                [h](const std::string& p){ MaterialLibrary::Get().SetAlbedoMap(h, p); MaterialLibrary::Get().Flush(); });
+            TextureRow("Normal", ed.NormalMapPath,
+                [h](const std::string& p){ MaterialLibrary::Get().SetNormalMap(h, p); MaterialLibrary::Get().Flush(); });
+            TextureRow("Metallic", ed.MetallicMapPath,
+                [h](const std::string& p){ MaterialLibrary::Get().SetMetallicMap(h, p); MaterialLibrary::Get().Flush(); });
+            TextureRow("Roughness", ed.RoughnessMapPath,
+                [h](const std::string& p){ MaterialLibrary::Get().SetRoughnessMap(h, p); MaterialLibrary::Get().Flush(); });
+            TextureRow("AO", ed.AOMapPath,
+                [h](const std::string& p){ MaterialLibrary::Get().SetAOMap(h, p); MaterialLibrary::Get().Flush(); });
+            TextureRow("Emissive", ed.EmissiveMapPath,
+                [h](const std::string& p){ MaterialLibrary::Get().SetEmissiveMap(h, p); MaterialLibrary::Get().Flush(); });
+        }
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Handle: %u", m_EditingMaterial);
+    }
+    ImGui::End();
+
+    if (!open)
+    {
+        m_ShowMaterialEditor = false;
+        m_EditingMaterial = kInvalidMaterial;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Create / duplicate
+// ---------------------------------------------------------------------------
+
 void EditorUI::CreateEmptyEntity()
 {
     auto entity = m_Registry.create();
     m_Registry.emplace<Transform>(entity);
-    m_Registry.emplace<NameComponent>(entity, "Entity " + std::to_string(static_cast<uint32_t>(entity)));
+    m_Registry.emplace<NameComponent>(entity,
+        "Entity " + std::to_string((uint32_t)entity));
     m_SelectedEntity = entity;
-    BINAX_LOG_INFO("Created empty entity {0}", static_cast<uint32_t>(entity));
+    BINAX_LOG_INFO("Created empty entity {0}", (uint32_t)entity);
 }
 
 void EditorUI::CreateCubeEntity()
 {
-    if (!m_CubeMesh)
+    MeshHandle cube = MeshLibrary::Get().Find("Cube");
+    if (cube == kInvalidMesh)
     {
-        BINAX_LOG_ERROR("Cube mesh not set in EditorUI!");
+        BINAX_LOG_ERROR("Cube mesh not registered in MeshLibrary");
         return;
     }
 
@@ -557,7 +719,7 @@ void EditorUI::CreateCubeEntity()
                 const int v = std::stoi(n.substr(kPrefixLen));
                 if (v >= nextIndex) nextIndex = v + 1;
             }
-            catch (...) {  }
+            catch (...) {}
         }
     }
 
@@ -566,41 +728,37 @@ void EditorUI::CreateCubeEntity()
     const int gridIdx = nextIndex - 1;
     const float offsetX = 1.5f * (gridIdx % 5);
     const float offsetZ = 1.5f * ((gridIdx / 5) % 5);
-    const glm::vec3 position(offsetX, 0.0f, offsetZ);
 
-    m_Registry.emplace<Transform>(entity, position,
+    m_Registry.emplace<Transform>(entity,
+                                  glm::vec3(offsetX, 0.0f, offsetZ),
                                   glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
                                   glm::vec3(1.0f));
 
-    m_Registry.emplace<MeshComponent>(entity, m_CubeMesh);
+    m_Registry.emplace<MeshComponent>(entity, MeshComponent{ cube });
 
-    // PBR-материал по умолчанию
-    auto& mat = m_Registry.emplace<MaterialComponent>(entity);
-    mat.Albedo    = glm::vec3(1.0f, 0.5f, 0.2f);
-    mat.Metallic  = 0.0f;
-    mat.Roughness = 0.4f;
-    mat.AO        = 1.0f;
-    mat.Emissive  = 0.0f;
+    std::string matName = "CubeMaterial_" + std::to_string(nextIndex);
+    MaterialGPU gpu{};
+    gpu.AlbedoRoughness = glm::vec4(1.0f, 0.5f, 0.2f, 0.4f);
+    gpu.MetallicAOEms   = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+    gpu.SkyReflParams   = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
+    gpu.StrengthA       = glm::vec4(1.0f);
+    gpu.StrengthB       = glm::vec4(1.0f);
+    MaterialHandle mat  = MaterialLibrary::Get().Add(matName, gpu);
+    MaterialLibrary::Get().Flush();
+
+    m_Registry.emplace<MaterialComponent>(entity, MaterialComponent{ mat });
 
     m_Registry.emplace<NameComponent>(entity, "Cube " + std::to_string(nextIndex));
 
     m_SelectedEntity = entity;
     BINAX_LOG_INFO("Created cube entity {0} at ({1:.2f}, 0, {2:.2f})",
-                   static_cast<uint32_t>(entity), offsetX, offsetZ);
+                   (uint32_t)entity, offsetX, offsetZ);
 }
 
 void EditorUI::DuplicateEntity(entt::entity entity)
 {
-    if (IsEditorCamera(entity))
-    {
-        BINAX_LOG_WARN("Cannot duplicate EditorCamera");
-        return;
-    }
-    if (m_Registry.any_of<SkyboxComponent>(entity))
-    {
-        BINAX_LOG_WARN("Cannot duplicate Skybox");
-        return;
-    }
+    if (IsEditorCamera(entity)) { BINAX_LOG_WARN("Cannot duplicate EditorCamera"); return; }
+    if (m_Registry.any_of<SkyboxComponent>(entity)) { BINAX_LOG_WARN("Cannot duplicate Skybox"); return; }
 
     if (!m_Registry.valid(entity) || !m_Registry.any_of<Transform>(entity))
     {
@@ -616,13 +774,34 @@ void EditorUI::DuplicateEntity(entt::entity entity)
     if (m_Registry.any_of<EditorCameraComponent>(newEntity))
         m_Registry.remove<EditorCameraComponent>(newEntity);
 
-    // MeshComponent хранит сырой указатель — сериализатор его не сохраняет,
-    // поэтому копируем вручную.
-    if (m_Registry.any_of<MeshComponent>(entity) &&
-        m_Registry.any_of<MeshComponent>(newEntity))
+    // Mesh
+    if (m_Registry.any_of<MeshComponent>(entity))
     {
-        m_Registry.get<MeshComponent>(newEntity).MeshPtr =
-            m_Registry.get<MeshComponent>(entity).MeshPtr;
+        if (!m_Registry.any_of<MeshComponent>(newEntity))
+            m_Registry.emplace<MeshComponent>(newEntity);
+        m_Registry.get<MeshComponent>(newEntity).MeshId =
+            m_Registry.get<MeshComponent>(entity).MeshId;
+    }
+
+    // Material: независимая копия (GPU + пути к текстурам).
+    if (m_Registry.any_of<MaterialComponent>(entity))
+    {
+        auto srcH = m_Registry.get<MaterialComponent>(entity).MaterialId;
+        if (srcH != kInvalidMaterial)
+        {
+            std::string baseName = MaterialLibrary::Get().GetName(srcH);
+            std::string newName  = baseName + "_copy";
+            int suffix = 1;
+            while (MaterialLibrary::Get().Find(newName) != kInvalidMaterial)
+                newName = baseName + "_copy" + std::to_string(suffix++);
+
+            MaterialHandle nh = MaterialLibrary::Get().Copy(newName, srcH);
+            MaterialLibrary::Get().Flush();
+
+            if (!m_Registry.any_of<MaterialComponent>(newEntity))
+                m_Registry.emplace<MaterialComponent>(newEntity);
+            m_Registry.get<MaterialComponent>(newEntity).MaterialId = nh;
+        }
     }
 
     if (m_Registry.any_of<Transform>(newEntity))
@@ -635,9 +814,12 @@ void EditorUI::DuplicateEntity(entt::entity entity)
         m_Registry.get<NameComponent>(newEntity).Name += " (copy)";
 
     m_SelectedEntity = newEntity;
-    BINAX_LOG_INFO("Duplicated entity {} -> {}",
-                   (uint32_t)entity, (uint32_t)newEntity);
+    BINAX_LOG_INFO("Duplicated entity {} -> {}", (uint32_t)entity, (uint32_t)newEntity);
 }
+
+// ---------------------------------------------------------------------------
+// Style (без изменений)
+// ---------------------------------------------------------------------------
 
 void EditorUI::ApplyQtGrayStyle()
 {
@@ -696,7 +878,6 @@ void EditorUI::ApplyQtGrayStyle()
 void EditorUI::LoadEditorFont()
 {
     std::string fontPath = "resources/fonts/EditorFont.ttf";
-
     std::ifstream file(fontPath);
     if (!file.good())
     {
@@ -712,25 +893,14 @@ void EditorUI::LoadEditorFont()
         BINAX_LOG_INFO("[Editor] Loaded font: {}", fontPath);
         io.FontDefault = font;
     }
-    else
-    {
-        BINAX_LOG_INFO("[Editor] Failed to load font: {}", fontPath);
-    }
 }
 
-bool EditorUI::IsGizmoUsing() const
-{
-    return ImGuizmo::IsUsing();
-}
-
-bool EditorUI::IsGizmoHovered() const
-{
-    return ImGuizmo::IsOver();
-}
+bool EditorUI::IsGizmoUsing() const   { return ImGuizmo::IsUsing(); }
+bool EditorUI::IsGizmoHovered() const { return ImGuizmo::IsOver(); }
 
 void EditorUI::AddPanelDrawer(std::function<void()> cb)
 {
     m_ExtraPanelDrawers.push_back(std::move(cb));
 }
 
-}
+} // namespace Binax
