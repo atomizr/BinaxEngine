@@ -18,6 +18,9 @@
 #include "Utils/Log.h"
 #include "Renderer/DeferredRenderer.h"
 #include "Renderer/Mesh.h"
+#include "Renderer/MeshLibrary.h"
+#include "Renderer/MaterialLibrary.h"
+#include "Renderer/InstanceBuffer.h"
 #include "Renderer/GPULight.h"
 #include "Renderer/AssetRegistry.h"
 #include "ECS/Components/Transform.h"
@@ -51,12 +54,6 @@ entt::entity CreateEditorCameraEntity(entt::registry& registry, float aspect)
                                              45.0f, 0.1f, 100.0f, 5.0f,
                                              aspect,
                                              true);
-    // FXAA-поля у CameraComponent берутся из default member initializers:
-    //   FXAAEnabled          = true
-    //   FXAAEdgeThreshold    = 0.063f
-    //   FXAAEdgeThresholdMin = 0.0312f
-    //   FXAASubpixelBlending = 1.0f
-
     registry.emplace<Binax::SystemEntityTag>(e);
     return e;
 }
@@ -69,7 +66,6 @@ entt::entity CreateSkyboxEntity(entt::registry& registry)
     return e;
 }
 
-// Ensures exactly one Skybox entity exists (survives scene reload).
 void EnsureSkyboxExists(entt::registry& registry)
 {
     auto view = registry.view<Binax::SkyboxComponent>();
@@ -77,7 +73,6 @@ void EnsureSkyboxExists(entt::registry& registry)
         CreateSkyboxEntity(registry);
 }
 
-// Collects SkyboxParams from the first Skybox component in the registry.
 Binax::SkyboxParams GatherSkyboxParams(entt::registry& registry)
 {
     Binax::SkyboxParams params;
@@ -87,8 +82,7 @@ Binax::SkyboxParams GatherSkyboxParams(entt::registry& registry)
     {
         auto& sc = view.get<Binax::SkyboxComponent>(e);
 
-        if (!sc.Enabled)
-            return params; // return default (no cubemap)
+        if (!sc.Enabled) return params;
 
         std::array<std::string, 6> faces = {
             sc.FacePX, sc.FaceNX,
@@ -98,18 +92,14 @@ Binax::SkyboxParams GatherSkyboxParams(entt::registry& registry)
 
         bool complete = true;
         for (const auto& p : faces)
-        {
             if (p.empty()) { complete = false; break; }
-        }
-        if (!complete)
-            return params;
+        if (!complete) return params;
 
         params.CubemapPtr      = Binax::AssetRegistry::Get().GetCubemap(faces, /*srgb*/ true);
         params.RotationRadians = glm::radians(sc.Rotation);
         params.Brightness      = sc.Brightness;
         return params;
     }
-
     return params;
 }
 
@@ -140,25 +130,43 @@ int main()
             return 1;
         }
 
-        const char* glVersion = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-        BINAX_LOG_INFO("OpenGL Version: {0}", glVersion);
+        BINAX_LOG_INFO("OpenGL: {0}",
+            reinterpret_cast<const char*>(glGetString(GL_VERSION)));
+
+        if (GLAD_GL_ARB_bindless_texture)
+            BINAX_LOG_INFO("ARB_bindless_texture: available");
+        else
+            BINAX_LOG_WARN("ARB_bindless_texture: NOT available — textures will be ignored");
+
+        if (GLAD_GL_ARB_shader_draw_parameters)
+            BINAX_LOG_INFO("ARB_shader_draw_parameters: available");
+        else
+            BINAX_LOG_WARN("ARB_shader_draw_parameters: NOT available — gl_DrawID broken");
 
         Binax::Timer timer;
         Binax::DeferredRenderer renderer(props.Width, props.Height);
 
-        Binax::Mesh cubeMesh = Binax::Mesh::CreateCube();
+        // ---- Register built-in meshes BEFORE anything else ----
+        {
+            auto cube = Binax::Mesh::CreateCube();
+            Binax::MeshLibrary::Get().Add("Cube", cube.Vertices, cube.Indices);
+
+            auto quad = Binax::Mesh::CreateFullscreenQuad();
+            Binax::MeshLibrary::Get().Add("FullscreenQuad", quad.Vertices, quad.Indices);
+
+            Binax::MeshLibrary::Get().Flush();
+            BINAX_LOG_INFO("Built-in meshes registered");
+        }
 
         entt::registry registry;
 
-        // ---- EditorCamera (system entity) ----
         CreateEditorCameraEntity(registry, window.GetAspect());
         BINAX_LOG_INFO("EditorCamera created");
 
-        // ---- Skybox (system entity) ----
         EnsureSkyboxExists(registry);
         BINAX_LOG_INFO("Skybox entity ensured");
 
-        // ---- Optional scene load ----
+        // ---- Scene load ----
         {
             std::ifstream check("scene.json");
             const bool sceneExists = check.good();
@@ -169,40 +177,23 @@ int main()
                 if (Binax::SceneSerializer::Deserialize(registry, "scene.json"))
                     BINAX_LOG_INFO("Scene loaded from disk");
                 else
-                    BINAX_LOG_WARN("Scene load failed — starting with empty scene");
+                    BINAX_LOG_WARN("Scene load failed — starting empty");
             }
             else
             {
-                BINAX_LOG_INFO("No scene.json found — starting with empty scene");
+                BINAX_LOG_INFO("No scene.json found — starting empty");
             }
         }
 
-        // ---- Restore mesh pointers (raw const Mesh* isn't serialized) ----
-        auto meshView = registry.view<Binax::MeshComponent>();
-        for (auto entity : meshView)
-        {
-            auto& meshComp = meshView.get<Binax::MeshComponent>(entity);
-            if (meshComp.MeshPtr == nullptr)
-            {
-                meshComp.MeshPtr = &cubeMesh;
-                BINAX_LOG_INFO("Restored mesh pointer for entity {0}",
-                               static_cast<uint32_t>(entity));
-            }
-        }
-
-        // ---- Skybox survives scene reload — recreate if lost ----
         EnsureSkyboxExists(registry);
 
         Binax::Viewport viewport(props.Width, props.Height);
         Binax::EditorCamera editorCamera(viewport.GetAspect());
         Binax::EditorUI editorUI(window.GetGLFWWindow(), registry);
         editorUI.SetViewport(&viewport);
-        editorUI.SetCubeMesh(&cubeMesh);
 
-        // ---- Stats panel (registered as external ImGui drawer) ----
+        // ---- Stats panel ----
         bool vsyncEnabled = props.VSync;
-
-        // Smoothed FPS so the number doesn't jitter every frame.
         float smoothedFps = 0.0f;
 
         editorUI.AddPanelDrawer([&]()
@@ -213,7 +204,6 @@ int main()
             const float ms = dt * 1000.0f;
             const float instFps = (dt > 1e-6f) ? (1.0f / dt) : 0.0f;
 
-            // Exponential smoothing: fast to react, but stable.
             smoothedFps = (smoothedFps <= 0.0f)
                               ? instFps
                               : smoothedFps * 0.9f + instFps * 0.1f;
@@ -222,22 +212,27 @@ int main()
             ImGui::Text("Frame time: %.2f ms", ms);
 
             ImGui::Separator();
-
             if (ImGui::Checkbox("VSync", &vsyncEnabled))
                 window.SetVSync(vsyncEnabled);
 
             ImGui::Separator();
-
             const Binax::FrameStats& s = renderer.GetFrameStats();
             ImGui::Text("Draw calls: %u", s.DrawCalls);
             ImGui::Text("Vertices:   %u", s.Vertices);
             ImGui::Text("Triangles:  %u", s.Triangles);
+
+            ImGui::Separator();
+            ImGui::Text("Meshes:     %u", Binax::MeshLibrary::Get().GetMeshCount());
+            ImGui::Text("Materials:  %u", Binax::MaterialLibrary::Get().GetMaterialCount());
+            ImGui::Text("Instances:  %u", Binax::InstanceBuffer::Get().GetCount());
 
             ImGui::End();
         });
 
         std::vector<Binax::GPULight> collectedLights;
         collectedLights.reserve(Binax::kMaxLights);
+
+        Binax::FrameRenderData frameData;
 
         glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
 
@@ -250,14 +245,13 @@ int main()
             Binax::Input::Update();
             window.Update();
 
-            // ---- Viewport aspect + resize renderer ----
             const float vpAspect = viewport.GetAspect();
             editorCamera.OnResize(vpAspect);
 
             {
                 glm::vec2 vpSize = viewport.GetSize();
-                uint32_t vpW = static_cast<uint32_t>(vpSize.x);
-                uint32_t vpH = static_cast<uint32_t>(vpSize.y);
+                uint32_t vpW = (uint32_t)vpSize.x;
+                uint32_t vpH = (uint32_t)vpSize.y;
                 if (vpW > 0 && vpH > 0 &&
                     (vpW != renderer.GetGBuffer().GetWidth() ||
                      vpH != renderer.GetGBuffer().GetHeight()))
@@ -283,10 +277,8 @@ int main()
                                            Binax::CameraComponent>();
             }
 
-            // ---- FXAA params pulled from the camera (default: disabled until camera found) ----
             Binax::FXAAParams frameFXAA{};
 
-            // ECS -> EditorCamera (pull settings)
             for (auto entity : cameraView)
             {
                 auto& transform     = cameraView.get<Binax::Transform>(entity);
@@ -303,7 +295,6 @@ int main()
                 editorCamera.SetRotationSpeed(editorCamComp.RotationSpeed);
                 editorCamera.SetSpeedMultiplier(editorCamComp.SpeedMultiplier);
 
-                // ---- FXAA (from CameraComponent) ----
                 frameFXAA.Enabled          = camComp.FXAAEnabled;
                 frameFXAA.EdgeThreshold    = camComp.FXAAEdgeThreshold;
                 frameFXAA.EdgeThresholdMin = camComp.FXAAEdgeThresholdMin;
@@ -316,7 +307,6 @@ int main()
             editorCamera.SetGizmoActive(editorUI.IsGizmoUsing());
             editorCamera.Update(delta);
 
-            // EditorCamera -> ECS (push back position/rotation)
             for (auto entity : cameraView)
             {
                 auto& transform = cameraView.get<Binax::Transform>(entity);
@@ -329,11 +319,13 @@ int main()
                                        editorCamera.GetProjectionMatrix());
 
             // ---- Render ----
-            renderer.ClearGBuffer();   // also resets frame stats
+            renderer.ClearGBuffer();
 
-            Binax::RenderSystem::Render(registry, renderer,
-                                        editorCamera.GetViewMatrix(),
-                                        editorCamera.GetProjectionMatrix());
+            Binax::RenderSystem::BuildFrameData(registry, frameData);
+
+            renderer.GeometryPass(frameData,
+                                  editorCamera.GetViewMatrix(),
+                                  editorCamera.GetProjectionMatrix());
 
             collectedLights.clear();
             Binax::RenderSystem::CollectLights(registry, collectedLights);
@@ -349,9 +341,9 @@ int main()
                                   invViewProj,
                                   skyboxParams,
                                   viewport.GetFBO(),
-                                  static_cast<uint32_t>(viewport.GetSize().x),
-                                  static_cast<uint32_t>(viewport.GetSize().y),
-                                  frameFXAA);   // <-- FXAA params
+                                  (uint32_t)viewport.GetSize().x,
+                                  (uint32_t)viewport.GetSize().y,
+                                  frameFXAA);
 
             // ---- UI ----
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -364,6 +356,16 @@ int main()
         }
 
         BINAX_LOG_INFO("Shutting down...");
+
+        // [FIX] Порядок важен: сначала освобождаем ВСЕ GPU-ресурсы, что
+        //       держат GL-объекты, пока контекст ещё валиден. Раньше
+        //       AssetRegistry (текстуры + кубемапы) очищался неявно в
+        //       статическом деструкторе уже после glfwTerminate() — 
+        //       glDeleteTextures без контекста = UB.
+        Binax::InstanceBuffer::Get().Clear();
+        Binax::AssetRegistry::Get().Clear();   // [FIX]
+        Binax::MaterialLibrary::Get().Clear();
+        Binax::MeshLibrary::Get().Clear();
     }
     catch (const std::exception& e)
     {
@@ -372,6 +374,5 @@ int main()
     }
 
     glfwTerminate();
-
     return exitCode;
 }
