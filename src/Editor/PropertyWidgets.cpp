@@ -23,6 +23,31 @@ using namespace Reflect;
 
 namespace {
 
+// -------------------------------------------------------------------------
+// [FIX] Безопасные преобразования path <-> UTF-8.
+//
+// На MSVC std::filesystem::path хранит wide-строку, а .string() пытается
+// сконвертировать её обратно в CP_ACP. Если символ не представим в
+// текущей ANSI-кодировке, бросается std::system_error 1113
+// "No mapping for the Unicode character exists in the target multi-byte
+//  code page".
+//
+// u8string() всегда даёт UTF-8 без потерь; u8string-конструктор
+// интерпретирует входные байты как UTF-8, а не как ANSI.
+// -------------------------------------------------------------------------
+
+std::string PathToUtf8(const std::filesystem::path& p)
+{
+    const auto u8 = p.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+std::filesystem::path PathFromUtf8(const std::string& s)
+{
+    return std::filesystem::path(
+        std::u8string(reinterpret_cast<const char8_t*>(s.data()), s.size()));
+}
+
 struct FileBrowserState
 {
     bool Open = false;
@@ -39,7 +64,7 @@ bool ExtensionMatches(const std::filesystem::path& p,
                       const std::vector<std::string>& exts)
 {
     if (exts.empty()) return true;
-    std::string e = p.extension().string();
+    std::string e = PathToUtf8(p.extension());           // [FIX]
     std::transform(e.begin(), e.end(), e.begin(),
                    [](unsigned char c){ return (char)std::tolower(c); });
     for (const auto& x : exts)
@@ -52,13 +77,6 @@ ImTextureID ToImTex(uint32_t id)
     return reinterpret_cast<ImTextureID>(static_cast<intptr_t>(id));
 }
 
-// -------------------------------------------------------------------------
-// UI icon loader (bypasses AssetRegistry):
-//   - GL_CLAMP_TO_EDGE     → нет кромочных артефактов
-//   - GL_LINEAR без мипмапов → нет «мыла» и полупрозрачных краёв
-//   - без анизотропии      → UI не нуждается
-// Кэш по пути: повторный вызов вернёт тот же GLuint.
-// -------------------------------------------------------------------------
 uint32_t LoadUIIcon(const std::string& path)
 {
     static std::unordered_map<std::string, uint32_t> s_Cache;
@@ -68,7 +86,7 @@ uint32_t LoadUIIcon(const std::string& path)
         return it->second;
 
     int w = 0, h = 0, ch = 0;
-    stbi_set_flip_vertically_on_load(1); // согласовано с UV ниже
+    stbi_set_flip_vertically_on_load(1);
     unsigned char* data = stbi_load(path.c_str(), &w, &h, &ch, 4);
     if (!data)
     {
@@ -96,7 +114,6 @@ uint32_t LoadUIIcon(const std::string& path)
     return id;
 }
 
-// Универсальная «иконочная» кнопка: если иконка не загрузилась — fallback на текст.
 bool IconButton(const char* id, uint32_t iconID, const ImVec2& size, const char* fallbackLabel)
 {
     if (iconID != 0)
@@ -105,9 +122,9 @@ bool IconButton(const char* id, uint32_t iconID, const ImVec2& size, const char*
             id,
             ToImTex(iconID),
             size,
-            ImVec2(0, 1), ImVec2(1, 0),   // flip Y for GL
-            ImVec4(0, 0, 0, 0),           // прозрачный фон
-            ImVec4(1, 1, 1, 1));          // без тинта
+            ImVec2(0, 1), ImVec2(1, 0),
+            ImVec4(0, 0, 0, 0),
+            ImVec4(1, 1, 1, 1));
     }
     return ImGui::Button(fallbackLabel);
 }
@@ -126,7 +143,6 @@ void DrawFileBrowserPopup()
     if (ImGui::BeginPopupModal(g_Browser.Title.c_str(), nullptr,
                                ImGuiWindowFlags_NoSavedSettings))
     {
-        // ---- Загружаем иконки (один раз на процесс) ----
         const uint32_t folderIconID = LoadUIIcon("resources/icons/folder.png");
         const uint32_t upIconID     = LoadUIIcon("resources/icons/up.png");
         const uint32_t cancelIconID = LoadUIIcon("resources/icons/cancel.png");
@@ -140,13 +156,15 @@ void DrawFileBrowserPopup()
         if (IconButton("##up", upIconID, upSize, "Up"))
         {
             auto parent = g_Browser.CurrentDir.parent_path();
-            if (!parent.empty() && std::filesystem::exists(parent))
+            std::error_code ec;
+            if (!parent.empty() && std::filesystem::exists(parent, ec) && !ec)
                 g_Browser.CurrentDir = parent;
         }
         ImGui::PopID();
 
         ImGui::SameLine();
-        ImGui::TextWrapped("%s", g_Browser.CurrentDir.string().c_str());
+        ImGui::TextWrapped("%s",
+            PathToUtf8(g_Browser.CurrentDir).c_str());   // [FIX]
         ImGui::Separator();
 
         // ---------- Listing ----------
@@ -155,32 +173,33 @@ void DrawFileBrowserPopup()
             const bool hasFolderIcon = (folderIconID != 0);
 
             std::error_code ec;
-            if (std::filesystem::exists(g_Browser.CurrentDir, ec))
+            if (std::filesystem::exists(g_Browser.CurrentDir, ec) && !ec)
             {
                 std::vector<std::filesystem::path> dirs, files;
                 for (const auto& entry :
                      std::filesystem::directory_iterator(g_Browser.CurrentDir, ec))
                 {
                     if (ec) break;
-                    if (entry.is_directory(ec))
-                        dirs.push_back(entry.path());
-                    else if (entry.is_regular_file(ec)
-                             && ExtensionMatches(entry.path(), g_Browser.Extensions))
-                        files.push_back(entry.path());
+                    std::error_code ec2;
+                    if (entry.is_directory(ec2)) {
+                        if (!ec2) dirs.push_back(entry.path());
+                    } else if (entry.is_regular_file(ec2)) {
+                        if (!ec2 && ExtensionMatches(entry.path(), g_Browser.Extensions))
+                            files.push_back(entry.path());
+                    }
                 }
                 std::sort(dirs.begin(), dirs.end());
                 std::sort(files.begin(), files.end());
 
-                // ---- Directories ----
                 const float lineH    = ImGui::GetTextLineHeight();
-                const float iconSize = lineH + 4.0f; // чуть крупнее строки
+                const float iconSize = lineH + 4.0f;
 
+                // ---- Directories ----
                 for (const auto& d : dirs)
                 {
-                    const std::string name = d.filename().string();
+                    const std::string name = PathToUtf8(d.filename());  // [FIX]
 
                     ImGui::PushID(name.c_str());
-
                     ImGui::PushStyleColor(ImGuiCol_Text,
                                           ImVec4(0.25f, 0.5f, 0.9f, 1.0f));
 
@@ -192,9 +211,7 @@ void DrawFileBrowserPopup()
                         ImGui::SameLine();
                     }
 
-                    const std::string label = hasFolderIcon
-                        ? name
-                        : ("[D] " + name);
+                    const std::string label = hasFolderIcon ? name : ("[D] " + name);
 
                     if (ImGui::Selectable(label.c_str(), false,
                                           ImGuiSelectableFlags_AllowDoubleClick))
@@ -210,7 +227,7 @@ void DrawFileBrowserPopup()
                 // ---- Files ----
                 for (const auto& f : files)
                 {
-                    const std::string name = f.filename().string();
+                    const std::string name = PathToUtf8(f.filename());  // [FIX]
                     ImGui::PushID(name.c_str());
 
                     if (ImGui::Selectable(name.c_str(), false,
@@ -222,10 +239,9 @@ void DrawFileBrowserPopup()
                             g_Browser.OnSelect = nullptr;
                             g_Browser.Open = false;
                             ImGui::CloseCurrentPopup();
-                            cb(f.string());
+                            cb(PathToUtf8(f));   // [FIX] возвращаем UTF-8
                         }
                     }
-
                     ImGui::PopID();
                 }
             }
@@ -414,9 +430,11 @@ bool PropertyWidgets::Draw(void* obj, const PropertyInfo& prop)
             }
         }
 
+        // [FIX] .filename() возвращает path, а не string.
         std::string display = path->empty()
             ? "(none)"
-            : std::filesystem::path(*path).filename().string();
+            : PathToUtf8(PathFromUtf8(*path).filename());
+
         ImGui::TextUnformatted(display.c_str());
         ImGui::SameLine();
 
@@ -452,4 +470,4 @@ bool PropertyWidgets::Draw(void* obj, const PropertyInfo& prop)
     return changed;
 }
 
-}
+} // namespace Binax
