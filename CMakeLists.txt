@@ -12,23 +12,36 @@ set(SOURCES
     src/Core/Timer.cpp
     src/Core/Window.cpp
     src/Utils/Log.cpp
+
+    # ---- Renderer ----
     src/Renderer/DeferredRenderer.cpp
     src/Renderer/Framebuffer.cpp
     src/Renderer/GBuffer.cpp
     src/Renderer/Mesh.cpp
+    src/Renderer/MeshLibrary.cpp         
+    src/Renderer/MaterialLibrary.cpp 
+    src/Renderer/InstanceBuffer.cpp     
     src/Renderer/Shader.cpp
     src/Renderer/Texture.cpp
     src/Renderer/AssetRegistry.cpp
     src/Renderer/Cubemap.cpp
+
+    # ---- Editor ----
     src/Editor/EditorUI.cpp
     src/Editor/EditorCamera.cpp
     src/Editor/Viewport.cpp
+    src/Editor/PropertyWidgets.cpp
+
+    # ---- Serialization ----
     src/Serialization/SceneSerializer.cpp
+    src/Serialization/PropertySerializer.cpp
+
+    # ---- Reflection ----
     src/Reflect/Reflection.cpp
     src/Reflect/ComponentRegistry.cpp
     src/Reflect/EngineReflection.cpp
-    src/Editor/PropertyWidgets.cpp
-    src/Serialization/PropertySerializer.cpp
+
+    # ---- Third party ----
     ${THIRDPARTY_DIR}/glad/src/glad.c
     ${THIRDPARTY_DIR}/imgui/imgui.cpp
     ${THIRDPARTY_DIR}/imgui/imgui_draw.cpp
