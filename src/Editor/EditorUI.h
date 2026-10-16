@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <entt/entt.hpp>
@@ -7,12 +6,14 @@
 #include <functional>
 #include <vector>
 
+#include "Renderer/MaterialLibrary.h"
+#include "Renderer/MeshLibrary.h"
+
 struct GLFWwindow;
 
 namespace Binax {
 
 class Viewport;
-class Mesh;
 
 class EditorUI
 {
@@ -23,7 +24,6 @@ public:
     void Draw();
     void AddPanelDrawer(std::function<void()> cb);
     void SetViewport(Viewport* viewport)   { m_Viewport  = viewport;  }
-    void SetCubeMesh(const Mesh* cubeMesh) { m_CubeMesh  = cubeMesh;  }
     bool IsViewportHovered() const         { return m_ViewportHovered; }
 
     void SetCameraMatrices(const glm::mat4& view, const glm::mat4& projection)
@@ -40,7 +40,6 @@ private:
     entt::registry& m_Registry;
     entt::entity m_SelectedEntity = entt::null;
     std::vector<std::function<void()>> m_ExtraPanelDrawers;
-    const Mesh* m_CubeMesh = nullptr;
     Viewport* m_Viewport = nullptr;
 
     bool m_ShowHierarchy = true;
@@ -57,13 +56,20 @@ private:
     float m_ViewportScreenW = 0.0f;
     float m_ViewportScreenH = 0.0f;
 
+    // --- Material editor ---
+    MaterialHandle m_EditingMaterial = kInvalidMaterial;
+    bool           m_ShowMaterialEditor = false;
+
+    // --- Draw passes ---
     void DrawHierarchy();
     void DrawInspector();
     void DrawViewport();
     void DrawGizmo();
     void DrawAddComponentMenu();
     void DrawCreateObjectDropdown();
+    void DrawMaterialEditor();
 
+    // --- Entity ops ---
     void CreateEmptyEntity();
     void CreateCubeEntity();
     void InitComponentFactory();
@@ -83,4 +89,4 @@ private:
     void LoadEditorFont();
 };
 
-} 
+}
