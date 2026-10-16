@@ -1,4 +1,6 @@
 #version 460 core
+#extension GL_ARB_bindless_texture : require
+#extension GL_ARB_gpu_shader_int64  : require
 
 layout(location = 0) out vec3 g_Position;
 layout(location = 1) out vec3 g_Normal;
@@ -8,48 +10,38 @@ layout(location = 3) out vec4 g_Material;
 in vec3 v_WorldPos;
 in vec3 v_Normal;
 in vec2 v_UV;
+flat in uint v_InstanceIndex;
 
-// ---- Scalar params ----
-uniform vec3  u_Albedo;
-uniform float u_Metallic;
-uniform float u_Roughness;
-uniform float u_AO;
-uniform float u_Emissive;
+struct InstanceGPU {
+    mat4 Model;
+    uint MaterialId;
+    uint MeshId;
+    uint BoneOffset;
+    uint Flags;
+};
+layout(std430, binding = 1) readonly buffer Instances {
+    InstanceGPU instances[];
+};
 
-// ---- Texture samplers ----
-uniform sampler2D u_AlbedoMap;
-uniform sampler2D u_NormalMap;
-uniform sampler2D u_MetallicMap;
-uniform sampler2D u_RoughnessMap;
-uniform sampler2D u_AOMap;
-uniform sampler2D u_EmissiveMap;
-
-// ---- Presence flags (0 = no texture bound) ----
-uniform int u_HasAlbedoMap;
-uniform int u_HasNormalMap;
-uniform int u_HasMetallicMap;
-uniform int u_HasRoughnessMap;
-uniform int u_HasAOMap;
-uniform int u_HasEmissiveMap;
-
-// ---- Per-map strengths (0..10) ----
-uniform float u_AlbedoStrength;
-uniform float u_NormalStrength;
-uniform float u_MetallicStrength;
-uniform float u_RoughnessStrength;
-uniform float u_AOStrength;
-uniform float u_EmissiveStrength;
-
-// ---- UV multiplier ----
-uniform float u_Tiling;
-
-// ---- Skybox reflections (direct sample, no baking) ----
-uniform int   u_SkyReflectionEnabled;
-uniform float u_SkyReflectionStrength;
+struct MaterialGPU {
+    vec4 AlbedoRoughness;
+    vec4 MetallicAOEms;
+    vec4 SkyReflParams;
+    vec4 StrengthA;
+    uint64_t AlbedoHandle;
+    uint64_t NormalHandle;
+    uint64_t MetallicHandle;
+    uint64_t RoughnessHandle;
+    uint64_t AOHandle;
+    uint64_t EmissiveHandle;
+    vec4 StrengthB;
+};
+layout(std430, binding = 2) readonly buffer Materials {
+    MaterialGPU materials[];
+};
 
 vec3 sRGBToLinear(vec3 c) { return pow(c, vec3(2.2)); }
 
-// Cotangent-frame TBN — works without per-vertex tangents.
 mat3 ComputeTBN(vec3 N, vec3 worldPos, vec2 uv)
 {
     vec3 dp1  = dFdx(worldPos);
@@ -67,55 +59,66 @@ mat3 ComputeTBN(vec3 N, vec3 worldPos, vec2 uv)
     return mat3(T * invmax, B * invmax, N);
 }
 
+// AMD-friendly bindless sampler. Contract: empty handle -> 0ul.
+sampler2D MakeSampler(uint64_t handle)
+{
+    return sampler2D(unpackUint2x32(handle));
+}
+
 void main()
 {
-    vec2 uv = v_UV * u_Tiling;
+    InstanceGPU inst = instances[v_InstanceIndex];
+    MaterialGPU m = materials[inst.MaterialId];
 
-    // ---------- Albedo (scalar × texture × strength) ----------
-    vec3 baseColor = u_Albedo;
-    if (u_HasAlbedoMap == 1)
-        baseColor *= texture(u_AlbedoMap, uv).rgb * u_AlbedoStrength;
+    vec2 uv = v_UV * m.MetallicAOEms.w;   // tiling
+
+    // ---------- Albedo ----------
+    // [FIX] Раньше константа m.AlbedoRoughness.rgb (sRGB из ColorEdit3)
+    //       перемножалась с уже линейной sRGB-текстурой, а в конце
+    //       ко всему результату применялся sRGBToLinear — итог был
+    //       дважды тонирован и слишком тёмный.
+    //       Правильно: константу один раз перевести в linear,
+    //       использовать её как tint для линейной текстуры.
+    vec3 albedoTint = sRGBToLinear(m.AlbedoRoughness.rgb);
+    vec3 baseColor  = albedoTint;
+    if (m.AlbedoHandle != 0ul)
+        baseColor *= texture(MakeSampler(m.AlbedoHandle), uv).rgb * m.StrengthB.x;
 
     // ---------- Normal ----------
     vec3 N = normalize(v_Normal);
-    if (u_HasNormalMap == 1)
+    if (m.NormalHandle != 0ul)
     {
         mat3 TBN = ComputeTBN(N, v_WorldPos, uv);
-        vec3 sampled = texture(u_NormalMap, uv).rgb * 2.0 - 1.0;
-        sampled.xy *= u_NormalStrength;
-        sampled = normalize(sampled);
-        N = normalize(TBN * sampled);
+        vec3 s = texture(MakeSampler(m.NormalHandle), uv).rgb * 2.0 - 1.0;
+        s.xy *= m.StrengthB.y;
+        N = normalize(TBN * normalize(s));
     }
 
-    // ---------- Metallic (texture replaces scalar) ----------
-    float metallic = u_Metallic;
-    if (u_HasMetallicMap == 1)
-        metallic = clamp(texture(u_MetallicMap, uv).r * u_MetallicStrength, 0.0, 1.0);
+    // ---------- Material scalars ----------
+    float metallic  = m.MetallicAOEms.x;
+    float roughness = m.AlbedoRoughness.w;   // .w = roughness (в CPU-структуре)
+    float ao        = m.MetallicAOEms.y;
+    float emissive  = m.MetallicAOEms.z;
 
-    // ---------- Roughness ----------
-    float roughness = u_Roughness;
-    if (u_HasRoughnessMap == 1)
-        roughness = clamp(texture(u_RoughnessMap, uv).r * u_RoughnessStrength, 0.04, 1.0);
+    if (m.MetallicHandle != 0ul)
+        metallic = clamp(texture(MakeSampler(m.MetallicHandle), uv).r * m.StrengthA.x, 0.0, 1.0);
 
-    // ---------- AO ----------
-    float ao = u_AO;
-    if (u_HasAOMap == 1)
-        ao = clamp(texture(u_AOMap, uv).r * u_AOStrength, 0.0, 1.0);
+    if (m.RoughnessHandle != 0ul)
+        roughness = clamp(texture(MakeSampler(m.RoughnessHandle), uv).r * m.StrengthA.y, 0.04, 1.0);
 
-    // ---------- Emissive (grayscale from R channel) ----------
-    float emissive = u_Emissive;
-    if (u_HasEmissiveMap == 1)
-        emissive = texture(u_EmissiveMap, uv).r * u_EmissiveStrength;
+    if (m.AOHandle != 0ul)
+        ao = clamp(texture(MakeSampler(m.AOHandle), uv).r * m.StrengthA.z, 0.0, 1.0);
+
+    if (m.EmissiveHandle != 0ul)
+        emissive = texture(MakeSampler(m.EmissiveHandle), uv).r * m.StrengthA.w;
 
     // ---------- Sky reflection pack ----------
-    // .a = enabled ? strength : -1.0  (negative = off; RGBA16F keeps sign losslessly)
-    float skyReflPacked = (u_SkyReflectionEnabled == 1)
-                            ? max(u_SkyReflectionStrength, 0.0)
+    float skyReflPacked = (m.SkyReflParams.x > 0.5)
+                            ? max(m.SkyReflParams.y, 0.0)
                             : -1.0;
 
-    // ---------- Write to G-buffer ----------
     g_Position  = v_WorldPos;
     g_Normal    = N;
-    g_Albedo_AO = vec4(sRGBToLinear(baseColor), ao);
+    g_Albedo_AO = vec4(baseColor, ao);          // [FIX] без повторного sRGBToLinear
     g_Material  = vec4(metallic, roughness, emissive, skyReflPacked);
 }
