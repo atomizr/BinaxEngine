@@ -14,7 +14,9 @@ namespace {
 std::string ReadTextFile(const std::string& path)
 {
     
-    std::ifstream file(std::filesystem::path(path), std::ios::binary);
+std::filesystem::path p(
+    std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size()));
+std::ifstream file(p, std::ios::binary);
     if (!file.is_open())
         throw std::runtime_error("Failed to open shader file: " + path);
 
