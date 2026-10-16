@@ -1,124 +1,76 @@
 #version 460 core
-#extension GL_ARB_bindless_texture : require
-#extension GL_ARB_gpu_shader_int64  : require
 
-layout(location = 0) out vec3 g_Position;
-layout(location = 1) out vec3 g_Normal;
-layout(location = 2) out vec4 g_Albedo_AO;
-layout(location = 3) out vec4 g_Material;
+// FXAA 3.11 — Timothy Lottes (NVIDIA), адаптировано под GLSL 460.
+// Вход: LDR-картинка после тонамаппинга/гаммы (RGBA8).
 
-in vec3 v_WorldPos;
-in vec3 v_Normal;
 in vec2 v_UV;
-flat in uint v_InstanceIndex;
+out vec4 FragColor;
 
-struct InstanceGPU {
-    mat4 Model;
-    uint MaterialId;
-    uint MeshId;
-    uint BoneOffset;
-    uint Flags;
-};
-layout(std430, binding = 1) readonly buffer Instances {
-    InstanceGPU instances[];
-};
+uniform sampler2D u_ColorTexture;
 
-struct MaterialGPU {
-    vec4 AlbedoRoughness;
-    vec4 MetallicAOEms;
-    vec4 SkyReflParams;
-    vec4 StrengthA;
-    uint64_t AlbedoHandle;
-    uint64_t NormalHandle;
-    uint64_t MetallicHandle;
-    uint64_t RoughnessHandle;
-    uint64_t AOHandle;
-    uint64_t EmissiveHandle;
-    vec4 StrengthB;
-};
-layout(std430, binding = 2) readonly buffer Materials {
-    MaterialGPU materials[];
-};
+uniform vec2  u_TexelSize;          // 1.0 / resolution
+uniform float u_EdgeThreshold;      // относительный порог (0.063)
+uniform float u_EdgeThresholdMin;   // абсолютный порог   (0.0312)
+uniform float u_SubpixelBlending;   // 0..1, субпиксельное сглаживание
 
-vec3 sRGBToLinear(vec3 c) { return pow(c, vec3(2.2)); }
-
-mat3 ComputeTBN(vec3 N, vec3 worldPos, vec2 uv)
+float Luma(vec3 rgb)
 {
-    vec3 dp1  = dFdx(worldPos);
-    vec3 dp2  = dFdy(worldPos);
-    vec2 duv1 = dFdx(uv);
-    vec2 duv2 = dFdy(uv);
-
-    vec3 dp2perp = cross(dp2, N);
-    vec3 dp1perp = cross(N, dp1);
-
-    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
-    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
-
-    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
-    return mat3(T * invmax, B * invmax, N);
-}
-
-// AMD-friendly bindless sampler. Contract: empty handle -> 0ul.
-sampler2D MakeSampler(uint64_t handle)
-{
-    return sampler2D(unpackUint2x32(handle));
+    return dot(rgb, vec3(0.299, 0.587, 0.114));
 }
 
 void main()
 {
-    InstanceGPU inst = instances[v_InstanceIndex];
-    MaterialGPU m = materials[inst.MaterialId];
+    vec3 rgbM  = texture(u_ColorTexture, v_UV).rgb;
+    vec3 rgbNW = textureOffset(u_ColorTexture, v_UV, ivec2(-1, -1)).rgb;
+    vec3 rgbNE = textureOffset(u_ColorTexture, v_UV, ivec2( 1, -1)).rgb;
+    vec3 rgbSW = textureOffset(u_ColorTexture, v_UV, ivec2(-1,  1)).rgb;
+    vec3 rgbSE = textureOffset(u_ColorTexture, v_UV, ivec2( 1,  1)).rgb;
 
-    vec2 uv = v_UV * m.MetallicAOEms.w;   // tiling
+    float lumaM  = Luma(rgbM);
+    float lumaNW = Luma(rgbNW);
+    float lumaNE = Luma(rgbNE);
+    float lumaSW = Luma(rgbSW);
+    float lumaSE = Luma(rgbSE);
 
-    // ---------- Albedo ----------
-    // [FIX] Раньше константа m.AlbedoRoughness.rgb (sRGB из ColorEdit3)
-    //       перемножалась с уже линейной sRGB-текстурой, а в конце
-    //       ко всему результату применялся sRGBToLinear — итог был
-    //       дважды тонирован и слишком тёмный.
-    //       Правильно: константу один раз перевести в linear,
-    //       использовать её как tint для линейной текстуры.
-    vec3 albedoTint = sRGBToLinear(m.AlbedoRoughness.rgb);
-    vec3 baseColor  = albedoTint;
-    if (m.AlbedoHandle != 0ul)
-        baseColor *= texture(MakeSampler(m.AlbedoHandle), uv).rgb * m.StrengthB.x;
+    float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+    float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+    float lumaRange = lumaMax - lumaMin;
 
-    // ---------- Normal ----------
-    vec3 N = normalize(v_Normal);
-    if (m.NormalHandle != 0ul)
+    // ---- Ранний выход на плоских участках ----
+    if (lumaRange < max(u_EdgeThresholdMin, lumaMax * u_EdgeThreshold))
     {
-        mat3 TBN = ComputeTBN(N, v_WorldPos, uv);
-        vec3 s = texture(MakeSampler(m.NormalHandle), uv).rgb * 2.0 - 1.0;
-        s.xy *= m.StrengthB.y;
-        N = normalize(TBN * normalize(s));
+        FragColor = vec4(rgbM, 1.0);
+        return;
     }
 
-    // ---------- Material scalars ----------
-    float metallic  = m.MetallicAOEms.x;
-    float roughness = m.AlbedoRoughness.w;   // .w = roughness (в CPU-структуре)
-    float ao        = m.MetallicAOEms.y;
-    float emissive  = m.MetallicAOEms.z;
+    // ---- Субпиксельный алиасинг ----
+    float lumaAvg = (lumaNW + lumaNE + lumaSW + lumaSE + lumaM * 4.0) * 0.125;
+    float subpixel = clamp(abs(lumaAvg - lumaM) / max(lumaRange, 1e-4), 0.0, 1.0);
+    subpixel = subpixel * subpixel * u_SubpixelBlending;
 
-    if (m.MetallicHandle != 0ul)
-        metallic = clamp(texture(MakeSampler(m.MetallicHandle), uv).r * m.StrengthA.x, 0.0, 1.0);
+    // ---- Направление поиска (перпендикуляр к границе) ----
+    vec2 dir;
+    dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
+    dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
 
-    if (m.RoughnessHandle != 0ul)
-        roughness = clamp(texture(MakeSampler(m.RoughnessHandle), uv).r * m.StrengthA.y, 0.04, 1.0);
+    float dirReduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * 0.25 * (1.0 / 8.0),
+                          1.0 / 128.0);
+    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * u_TexelSize;
 
-    if (m.AOHandle != 0ul)
-        ao = clamp(texture(MakeSampler(m.AOHandle), uv).r * m.StrengthA.z, 0.0, 1.0);
+    // ---- Двойная выборка вдоль кромки ----
+    vec3 rgbA = 0.5 * (
+        texture(u_ColorTexture, v_UV + dir * (1.0 / 3.0 - 0.5)).rgb +
+        texture(u_ColorTexture, v_UV + dir * (2.0 / 3.0 - 0.5)).rgb);
 
-    if (m.EmissiveHandle != 0ul)
-        emissive = texture(MakeSampler(m.EmissiveHandle), uv).r * m.StrengthA.w;
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (
+        texture(u_ColorTexture, v_UV + dir * -0.5).rgb +
+        texture(u_ColorTexture, v_UV + dir *  0.5).rgb);
 
-    // ---------- Sky reflection pack ----------
-    float skyReflPacked = (m.SkyReflParams.x > 0.5)
-                            ? max(m.SkyReflParams.y, 0.0)
-                            : -1.0;
+    float lumaB = Luma(rgbB);
+    vec3 result = ((lumaB < lumaMin) || (lumaB > lumaMax)) ? rgbA : rgbB;
 
-    g_Position  = v_WorldPos;
-    g_Normal    = N;
-    g_Albedo_AO = vec4(baseColor, ao);          // [FIX] без повторного sRGBToLinear
-    g_Material  = vec4(metallic, roughness, emissive, skyReflPacked);
+    result = mix(result, rgbM, subpixel);
+
+    FragColor = vec4(result, 1.0);
 }
