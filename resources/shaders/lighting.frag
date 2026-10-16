@@ -63,7 +63,11 @@ vec3 F_Schlick(float cosTheta, vec3 F0)
 vec3 EvaluateBRDF(vec3 N, vec3 V, vec3 L, vec3 radiance,
                   vec3 albedo, float metallic, float roughness)
 {
-    vec3 H = normalize(V + L);
+    // Half-vector: защищаемся от NaN, когда V ≈ -L
+    vec3 Hv = V + L;
+    float hLen = length(Hv);
+    if (hLen < 1e-5) return vec3(0.0);
+    vec3 H = Hv / hLen;
 
     float NdotV = max(dot(N, V), 1e-4);
     float NdotL = max(dot(N, L), 0.0);
@@ -122,7 +126,7 @@ vec3 SampleSkybox(vec3 dir)
 void main()
 {
     vec3 worldPos = texture(u_PositionTexture, v_UV).rgb;
-    vec3 N        = normalize(texture(u_NormalTexture, v_UV).rgb);
+    vec3 Nraw     = texture(u_NormalTexture,   v_UV).rgb;
 
     vec4 albedoAO = texture(u_AlbedoTexture, v_UV);
     vec3 albedo   = albedoAO.rgb;
@@ -138,7 +142,9 @@ void main()
     float skyReflStrength = max(mat.a, 0.0);
 
     // ------- Background pixel (no geometry) → skybox -------
-    if (dot(N, N) < 1e-4)
+    // ВАЖНО: проверяем ДЛИНУ до normalize, иначе normalize(0) даёт NaN
+    // на части драйверов, и NaN-нормали проваливаются в lit-ветку.
+    if (dot(Nraw, Nraw) < 1e-4)
     {
         vec3 color = vec3(0.0);
 
@@ -156,7 +162,8 @@ void main()
     }
 
     // ------- Lit pixel -------
-    vec3 V  = normalize(u_CameraPosition - worldPos);
+    vec3 N = normalize(Nraw);
+    vec3 V = normalize(u_CameraPosition - worldPos);
     vec3 Lo = vec3(0.0);
 
     for (int i = 0; i < u_LightCount; ++i)
@@ -197,9 +204,11 @@ void main()
         Lo += EvaluateBRDF(N, V, L, radiance, albedo, metallic, roughness);
     }
 
-    // ---- Ambient ----
-    vec3 F0 = mix(vec3(0.04), albedo, metallic);
-    vec3 ambient = F0 * albedo * 0.03 * ao;
+    // ---- Ambient (hemisphere) ----
+    vec3 skyColor    = vec3(0.35, 0.42, 0.55);
+    vec3 groundColor = vec3(0.12, 0.10, 0.08);
+    float hemi       = N.y * 0.5 + 0.5;
+    vec3 ambient     = mix(groundColor, skyColor, hemi) * albedo * ao;
 
     if (u_HasEnvironment == 1)
     {
@@ -213,11 +222,8 @@ void main()
             vec3 R    = reflect(-V, N);
             vec3 skyR = SampleSkybox(R);
 
-            // Металлы отражают со своим цветом (F0 = albedo),
-            // диэлектрики — бесцветно.
             vec3 reflTint = mix(vec3(1.0), albedo, metallic);
 
-            // Лёгкий Fresnel-буст по касательной: 1.0 «в лоб» → 1.6 на краю.
             float NdotV   = max(dot(N, V), 1e-4);
             float graze   = pow(1.0 - NdotV, 5.0);
             float fresnel = mix(1.0, 1.6, graze);
