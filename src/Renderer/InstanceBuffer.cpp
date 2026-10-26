@@ -48,4 +48,4 @@ void InstanceBuffer::Clear()
     if (m_SSBO) { glDeleteBuffers(1, &m_SSBO); m_SSBO = 0; }
 }
 
-} // namespace Binax
+} 
