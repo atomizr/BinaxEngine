@@ -30,6 +30,25 @@ MaterialHandle MaterialLibrary::Add(const std::string& name, const MaterialGPU& 
     return h;
 }
 
+MaterialHandle MaterialLibrary::GetOrCreateDefault()
+{
+    
+    
+    constexpr const char* kName = "__Default";
+
+    auto it = m_ByName.find(kName);
+    if (it != m_ByName.end())
+        return it->second;
+
+    MaterialGPU def{};
+    def.AlbedoRoughness = glm::vec4(0.8f, 0.8f, 0.8f, 0.5f);
+    def.MetallicAOEms   = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+    def.SkyReflParams   = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
+    def.StrengthA       = glm::vec4(1.0f);
+    def.StrengthB       = glm::vec4(1.0f);
+    return Add(kName, def);
+}
+
 MaterialHandle MaterialLibrary::Copy(const std::string& newName, MaterialHandle src)
 {
     if (src >= m_CPU.size())
@@ -37,8 +56,6 @@ MaterialHandle MaterialLibrary::Copy(const std::string& newName, MaterialHandle 
 
     MaterialHandle h = Add(newName, m_CPU[src]);
 
-    // Копируем пути к текстурам (иначе UI «теряет» их после дублирования,
-    // хотя GPU-handle'ы остаются).
     MaterialEditData ed = m_Edit[src];
     ed.Name = newName;
     m_Edit[h] = std::move(ed);
@@ -63,7 +80,7 @@ void MaterialLibrary::SetAlbedoMap(MaterialHandle h, const std::string& path)
 {
     if (h >= m_CPU.size()) return;
     m_Edit[h].AlbedoMapPath = path;
-    m_CPU[h].AlbedoHandle = AssetRegistry::Get().GetTextureHandle(path, /*srgb*/ true);
+    m_CPU[h].AlbedoHandle = AssetRegistry::Get().GetTextureHandle(path,  true);
     m_Dirty = true;
 }
 
@@ -71,7 +88,7 @@ void MaterialLibrary::SetNormalMap(MaterialHandle h, const std::string& path)
 {
     if (h >= m_CPU.size()) return;
     m_Edit[h].NormalMapPath = path;
-    m_CPU[h].NormalHandle = AssetRegistry::Get().GetTextureHandle(path, /*srgb*/ false);
+    m_CPU[h].NormalHandle = AssetRegistry::Get().GetTextureHandle(path,  false);
     m_Dirty = true;
 }
 
@@ -103,7 +120,7 @@ void MaterialLibrary::SetEmissiveMap(MaterialHandle h, const std::string& path)
 {
     if (h >= m_CPU.size()) return;
     m_Edit[h].EmissiveMapPath = path;
-    m_CPU[h].EmissiveHandle = AssetRegistry::Get().GetTextureHandle(path, /*srgb*/ true);
+    m_CPU[h].EmissiveHandle = AssetRegistry::Get().GetTextureHandle(path,  true);
     m_Dirty = true;
 }
 
@@ -140,4 +157,4 @@ void MaterialLibrary::Clear()
     if (m_SSBO) { glDeleteBuffers(1, &m_SSBO); m_SSBO = 0; }
 }
 
-} // namespace Binax
+} 
