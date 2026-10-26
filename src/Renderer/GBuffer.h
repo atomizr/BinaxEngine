@@ -16,13 +16,17 @@ public:
         NORMAL     = 1,
         ALBEDO_AO  = 2,
         MATERIAL   = 3,
-        COUNT      = 4
+        VELOCITY   = 4,
+        COUNT      = 5
     };
 
     uint32_t GetTexture(TextureType type) const
     { return GetColorAttachment(static_cast<uint32_t>(type)); }
 
-    void BindTextures(uint32_t startSlot) const;
+    
+    
+    
+    void BindTextures(uint32_t startSlot, uint32_t count = 4) const;
 
 private:
     void Init(uint32_t width, uint32_t height);
