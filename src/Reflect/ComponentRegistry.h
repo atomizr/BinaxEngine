@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "Reflect/Reflection.h"
@@ -13,8 +12,6 @@ public:
         std::string Name;               
         const void* TypeId = nullptr;
 
-        
-        
         
         
         bool Hidden    = false;
@@ -42,6 +39,10 @@ private:
     ComponentRegistry(const ComponentRegistry&) = delete;
     ComponentRegistry& operator=(const ComponentRegistry&) = delete;
 
+    
+    
+    void WarnDuplicate(const std::string& name) const;
+
     std::vector<std::unique_ptr<Entry>> m_Entries;
     std::unordered_map<std::string, size_t> m_ByName;
     std::unordered_map<const void*, size_t> m_ByTypeId;
@@ -50,6 +51,15 @@ private:
 template<typename T>
 void ComponentRegistry::Register(std::string uiName, bool hidden, bool transient)
 {
+    
+    
+    
+    if (m_ByName.count(uiName) || m_ByTypeId.count(GetTypeId<T>()))
+    {
+        WarnDuplicate(uiName);
+        return;
+    }
+
     auto e = std::make_unique<Entry>();
     e->Name      = std::move(uiName);
     e->TypeId    = GetTypeId<T>();
@@ -72,4 +82,4 @@ void ComponentRegistry::Register(std::string uiName, bool hidden, bool transient
     m_Entries.push_back(std::move(e));
 }
 
-} 
+}
