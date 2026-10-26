@@ -57,7 +57,7 @@ struct PropertyInfo
     bool  ReadOnly  = false;
     bool  Transient = false;
 
-    // Asset hint for PropertyKind::Asset — e.g. "Texture", "Mesh".
+    
     std::string AssetType;
 
     std::vector<EnumEntry> EnumValues;
@@ -66,6 +66,13 @@ struct PropertyInfo
     { return reinterpret_cast<T*>(static_cast<char*>(obj) + Offset); }
     template<typename T> const T* GetPtr(const void* obj) const noexcept
     { return reinterpret_cast<const T*>(static_cast<const char*>(obj) + Offset); }
+
+    
+    
+    void*       GetRaw(void* obj)       const noexcept
+    { return static_cast<char*>(obj) + Offset; }
+    const void* GetRaw(const void* obj) const noexcept
+    { return static_cast<const char*>(obj) + Offset; }
 
     PropertyInfo& SetSpeed(float s)                  { Speed = s; return *this; }
     PropertyInfo& SetRange(float mn, float mx)       { Min = mn; Max = mx; HasRange = true; return *this; }
