@@ -9,12 +9,14 @@ namespace Binax {
 struct InstanceGPU
 {
     glm::mat4 Model;
+    
+    glm::mat4 PrevModel;
     uint32_t  MaterialId = 0;
     uint32_t  MeshId     = 0;
     uint32_t  BoneOffset = 0;
     uint32_t  Flags      = 0;
 };
-static_assert(sizeof(InstanceGPU) == 80, "InstanceGPU must be 80 bytes");
+static_assert(sizeof(InstanceGPU) == 144, "InstanceGPU must be 144 bytes");
 
 namespace InstanceFlags {
     enum : uint32_t { None = 0u, Skinned = 1u << 0 };
@@ -39,4 +41,4 @@ private:
     uint32_t m_Count    = 0;
 };
 
-} // namespace Binax
+} 
