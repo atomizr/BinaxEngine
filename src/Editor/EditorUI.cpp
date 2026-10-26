@@ -15,11 +15,17 @@
 #include "ECS/Components/EditorCameraComponent.h"
 #include "ECS/Components/SystemEntityTag.h"
 #include "ECS/Components/SkyboxComponent.h"
+#include "ECS/Components/PostProcessComponent.h"
+#include "ECS/Components/ParentComponent.h"
+#include "ECS/Systems/TransformSystem.h"
 #include "Renderer/Mesh.h"
 #include "Renderer/MeshLibrary.h"
 #include "Renderer/MaterialLibrary.h"
 #include "Utils/Log.h"
 #include "Serialization/SceneSerializer.h"
+#include "Serialization/MaterialSerializer.h"
+#include "Serialization/PostProcessSerializer.h"
+#include "Utils/AssetPaths.h"
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
@@ -32,26 +38,35 @@
 #include "Reflect/EngineReflection.h"
 #include "Editor/PropertyWidgets.h"
 #include "Serialization/PropertySerializer.h"
+#include "Utils/FileIO.h"
+#include "Utils/Paths.h"
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
 
 namespace {
 
-// [FIX] Безопасное преобразование path → UTF-8 std::string.
-//       .string() на MSVC может бросить std::system_error 1113
-//       "No mapping for the Unicode character..." на путях с
-//       кириллицей/эмодзи при не-соответствующей ANSI-кодировке.
+
+
 std::string PathToUtf8(const std::filesystem::path& p)
 {
-    const auto u8 = p.u8string();
-    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+    return Binax::Paths::ToUtf8(p);
 }
 
 std::filesystem::path PathFromUtf8(const std::string& s)
 {
-    return std::filesystem::path(
-        std::u8string(reinterpret_cast<const char8_t*>(s.data()), s.size()));
+    return Binax::Paths::FromUtf8(s);
 }
 
-} // namespace
+std::string ToLowerAscii(const std::string& s)
+{
+    std::string out = s;
+    for (char& c : out)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+}
+
+} 
 
 namespace Binax {
 
@@ -85,9 +100,9 @@ void EditorUI::InitComponentFactory()
     Reflect::RegisterEngineComponents();
 }
 
-// ---------------------------------------------------------------------------
-// Component add / remove
-// ---------------------------------------------------------------------------
+
+
+
 
 void EditorUI::AddComponentToEntity(entt::entity entity, const std::string& componentName)
 {
@@ -100,6 +115,17 @@ void EditorUI::AddComponentToEntity(entt::entity entity, const std::string& comp
     {
         BINAX_LOG_WARN("Cannot add '{}' to Skybox", componentName);
         return;
+    }
+    
+    
+    if (componentName == "Post Processing")
+    {
+        auto ppView = m_Registry.view<PostProcessComponent>();
+        if (ppView.begin() != ppView.end())
+        {
+            BINAX_LOG_WARN("Post Processing config already exists — only one is allowed");
+            return;
+        }
     }
 
     const auto* entry = Reflect::ComponentRegistry::Get().Find(componentName);
@@ -129,7 +155,8 @@ void EditorUI::RemoveComponentFromEntity(entt::entity entity, const std::string&
         BINAX_LOG_WARN("Cannot remove '{}' from Skybox", componentName);
         return;
     }
-    if (componentName == "Transform" || componentName == "Name")
+    if (componentName == "Transform" || componentName == "Name" ||
+        componentName == "Post Processing")
     {
         BINAX_LOG_WARN("Cannot remove '{}'", componentName);
         return;
@@ -143,31 +170,56 @@ void EditorUI::RemoveComponentFromEntity(entt::entity entity, const std::string&
     BINAX_LOG_INFO("Removed '{}' from entity {}", componentName, (uint32_t)entity);
 }
 
-// ---------------------------------------------------------------------------
-// Scene IO
-// ---------------------------------------------------------------------------
+
+
+
 
 void EditorUI::SaveScene()
 {
-    SceneSerializer::Serialize(m_Registry, "scene.json");
+    
+    
+    
+    const std::string materialDir = Paths::Resolve(AssetFiles::kMaterialsDir);
+    const std::string levelPath   = Paths::Resolve(AssetFiles::kLevelFile);
+    const std::string ppPath      = Paths::Resolve(AssetFiles::kPostProcessFile);
+
+    MaterialSerializer::SaveAll(MaterialLibrary::Get(), materialDir);
+    SceneSerializer::Serialize(m_Registry, levelPath);
+    PostProcessSerializer::Save(m_Registry, ppPath);
 }
 
 void EditorUI::LoadScene()
 {
     m_SelectedEntity = entt::null;
 
-    // Сбрасываем material editor: handle'ы старой сцены могут стать
-    // невалидными после перезагрузки.
     m_EditingMaterial    = kInvalidMaterial;
     m_ShowMaterialEditor = false;
 
-    if (!SceneSerializer::Deserialize(m_Registry, "scene.json"))
+    const std::string materialDir = Paths::Resolve(AssetFiles::kMaterialsDir);
+    const std::string levelPath   = Paths::Resolve(AssetFiles::kLevelFile);
+    const std::string ppPath      = Paths::Resolve(AssetFiles::kPostProcessFile);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(Paths::FromUtf8(levelPath), ec) || ec)
     {
-        BINAX_LOG_WARN("Scene load failed — registry left unchanged");
+        BINAX_LOG_WARN("Level file not found: {}", levelPath);
         return;
     }
 
-    // Восстанавливаем Skybox, если он был утерян
+    
+    MaterialSerializer::LoadAll(MaterialLibrary::Get(), materialDir);
+
+    if (!SceneSerializer::Deserialize(m_Registry, levelPath))
+    {
+        BINAX_LOG_WARN("Level load failed — the registry may be partially updated");
+        return;
+    }
+
+    
+    if (std::filesystem::exists(Paths::FromUtf8(ppPath), ec) && !ec)
+        PostProcessSerializer::Load(m_Registry, ppPath);
+
+    
     {
         auto skyView = m_Registry.view<SkyboxComponent>();
         if (skyView.begin() == skyView.end())
@@ -175,52 +227,201 @@ void EditorUI::LoadScene()
             auto e = m_Registry.create();
             m_Registry.emplace<NameComponent>(e, "Skybox");
             m_Registry.emplace<SkyboxComponent>(e);
-            BINAX_LOG_INFO("Skybox recreated after scene load");
+            BINAX_LOG_INFO("Skybox recreated after level load");
         }
     }
 
-    BINAX_LOG_INFO("Scene loaded");
+    
+    
+    {
+        auto ppView = m_Registry.view<PostProcessComponent>();
+        if (ppView.begin() == ppView.end())
+        {
+            auto e = m_Registry.create();
+            m_Registry.emplace<NameComponent>(e, "PostProcessingCfg");
+            m_Registry.emplace<Transform>(e);
+            m_Registry.emplace<PostProcessComponent>(e);
+            m_Registry.emplace<SystemEntityTag>(e);
+            BINAX_LOG_INFO("PostProcessingCfg recreated after level load");
+        }
+    }
+
+    BINAX_LOG_INFO("Level loaded");
 }
 
-// ---------------------------------------------------------------------------
-// Entity ops
-// ---------------------------------------------------------------------------
+
+
+
 
 void EditorUI::DeleteEntity(entt::entity entity)
 {
+    
+    
+    if (!m_Registry.valid(entity))
+    {
+        BINAX_LOG_WARN("Entity {0} is not valid", (uint32_t)entity);
+        return;
+    }
     if (m_Registry.any_of<SystemEntityTag>(entity))
     {
         BINAX_LOG_WARN("Cannot delete system entity (tagged SystemEntityTag)");
         return;
     }
-    if (m_Registry.any_of<SkyboxComponent>(entity))
+    
+    
+    
+    
+    if (IsProtectedEntity(entity))
     {
-        BINAX_LOG_WARN("Cannot delete Skybox entity");
-        return;
-    }
-    if (!m_Registry.valid(entity))
-    {
-        BINAX_LOG_WARN("Entity {0} is not valid", (uint32_t)entity);
+        BINAX_LOG_WARN("Cannot delete system entity (camera / skybox / post-process)");
         return;
     }
 
     BINAX_LOG_INFO("Deleting entity {0} (name: {1})",
                    (uint32_t)entity, GetEntityName(entity));
 
-    uint32_t id = (uint32_t)entity;
+    
+    
+    const std::vector<entt::entity> subtree = CollectSubtree(entity);
 
-    // Сравнение делаем ДО destroy — на случай переиспользования handle.
-    if (m_SelectedEntity == entity)
-        m_SelectedEntity = entt::null;
+    uint32_t destroyed = 0;
+    for (auto e : subtree)
+    {
+        if (!m_Registry.valid(e))
+            continue;
+        if (m_Registry.any_of<SystemEntityTag>(e) || IsProtectedEntity(e))
+            continue;
 
-    m_Registry.destroy(entity);
+        if (m_SelectedEntity == e)
+            m_SelectedEntity = entt::null;
 
-    BINAX_LOG_INFO("Entity {0} destroyed", id);
+        m_Registry.destroy(e);
+        ++destroyed;
+    }
+
+    BINAX_LOG_INFO("Entity {0} destroyed (with subtree: {1} entities)",
+                   (uint32_t)entity, destroyed);
+}
+
+std::vector<entt::entity> EditorUI::CollectSubtree(entt::entity root) const
+{
+    std::vector<entt::entity> out;
+    if (!m_Registry.valid(root))
+        return out;
+
+    out.push_back(root);
+    std::unordered_set<entt::entity> seen{ root };
+
+    for (size_t i = 0; i < out.size(); ++i)
+    {
+        auto view = m_Registry.view<ParentComponent>();
+        for (auto e : view)
+        {
+            if (view.get<ParentComponent>(e).Parent == out[i] && seen.insert(e).second)
+                out.push_back(e);
+        }
+    }
+
+    return out;
+}
+
+bool EditorUI::IsDescendantOf(entt::entity candidate, entt::entity ancestor) const
+{
+    int guard = 0;
+    while (candidate != entt::null && m_Registry.valid(candidate) && guard++ < 256)
+    {
+        const auto* pc = m_Registry.try_get<ParentComponent>(candidate);
+        if (!pc || pc->Parent == entt::null)
+            return false;
+        if (pc->Parent == ancestor)
+            return true;
+        candidate = pc->Parent;
+    }
+    return false;
+}
+
+void EditorUI::SetParent(entt::entity child, entt::entity parent)
+{
+    if (child == entt::null || !m_Registry.valid(child) || child == parent)
+        return;
+    if (!m_Registry.any_of<Transform>(child) || IsProtectedEntity(child))
+        return;
+
+    if (parent != entt::null)
+    {
+        if (!m_Registry.valid(parent) || !m_Registry.any_of<Transform>(parent))
+            return;
+        if (IsProtectedEntity(parent))
+        {
+            BINAX_LOG_WARN("Cannot parent to a system entity");
+            return;
+        }
+        if (IsDescendantOf(parent, child))
+        {
+            BINAX_LOG_WARN("Cannot parent: would create a cycle");
+            return;
+        }
+    }
+
+    
+    const glm::mat4 worldBefore = TransformSystem::GetWorldMatrix(m_Registry, child);
+
+    if (parent == entt::null)
+        m_Registry.remove<ParentComponent>(child);
+    else
+        m_Registry.get_or_emplace<ParentComponent>(child).Parent = parent;
+
+    const glm::mat4 parentWorld = (parent == entt::null)
+                                      ? glm::mat4(1.0f)
+                                      : TransformSystem::GetWorldMatrix(m_Registry, parent);
+
+    const glm::mat4 local = glm::inverse(parentWorld) * worldBefore;
+
+    glm::vec3 scale, translation, skew;
+    glm::vec4 perspective;
+    glm::quat rotation;
+    if (!glm::decompose(local, scale, rotation, translation, skew, perspective))
+        return;   
+
+    if (!std::isfinite(translation.x) || !std::isfinite(translation.y) ||
+        !std::isfinite(translation.z))
+        return;
+
+    auto clampScale = [](float s)
+    {
+        constexpr float kMin = 1e-4f;
+        if (!std::isfinite(s) || std::abs(s) < kMin)
+            return (s < 0.0f) ? -kMin : kMin;
+        return s;
+    };
+    scale.x = clampScale(scale.x);
+    scale.y = clampScale(scale.y);
+    scale.z = clampScale(scale.z);
+
+    const float qlen2 = rotation.w * rotation.w + rotation.x * rotation.x +
+                        rotation.y * rotation.y + rotation.z * rotation.z;
+
+    Transform& tr = m_Registry.get<Transform>(child);
+    tr.Position = translation;
+    tr.Rotation = (qlen2 > 1e-12f) ? glm::normalize(rotation)
+                                   : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    tr.Scale    = scale;
+
+    BINAX_LOG_INFO("Reparented '{0}' -> '{1}'",
+                   GetEntityName(child),
+                   (parent == entt::null) ? std::string("<root>") : GetEntityName(parent));
 }
 
 bool EditorUI::IsEditorCamera(entt::entity entity) const
 {
     return m_Registry.any_of<EditorCameraComponent>(entity);
+}
+
+bool EditorUI::IsProtectedEntity(entt::entity entity) const
+{
+    return m_Registry.any_of<EditorCameraComponent>(entity) ||
+           m_Registry.any_of<SkyboxComponent>(entity) ||
+           m_Registry.any_of<PostProcessComponent>(entity);
 }
 
 std::string EditorUI::GetEntityName(entt::entity entity) const
@@ -232,7 +433,14 @@ std::string EditorUI::GetEntityName(entt::entity entity) const
 
 void EditorUI::HandleShortcuts()
 {
-    if (ImGui::GetIO().WantTextInput) return;
+    
+    
+    if (ImGui::GetIO().WantTextInput || ImGui::IsAnyItemActive()) return;
+
+    
+    
+    
+    if (PropertyWidgets::IsFileBrowserOpen()) return;
 
     const bool ctrl = Input::IsKeyPressed(GLFW_KEY_LEFT_CONTROL) ||
                       Input::IsKeyPressed(GLFW_KEY_RIGHT_CONTROL);
@@ -248,11 +456,151 @@ void EditorUI::HandleShortcuts()
         if (m_SelectedEntity != entt::null && m_Registry.valid(m_SelectedEntity))
             DeleteEntity(m_SelectedEntity);
     }
+
+    
+    if (ctrl && Input::IsKeyJustPressed(GLFW_KEY_F))
+    {
+        m_FocusSearch = true;
+    }
+    else if (!ctrl && Input::IsKeyJustPressed(GLFW_KEY_F))
+    {
+        FocusOnSelection();
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Main draw
-// ---------------------------------------------------------------------------
+void EditorUI::FocusOnSelection()
+{
+    entt::entity camEntity = entt::null;
+    auto camView = m_Registry.view<Transform, EditorCameraComponent, CameraComponent>();
+    for (auto e : camView)
+    {
+        camEntity = e;
+        break;
+    }
+    if (camEntity == entt::null)
+        return;
+
+    Transform& camTransform = m_Registry.get<Transform>(camEntity);
+    const CameraComponent& camera = m_Registry.get<CameraComponent>(camEntity);
+
+    
+    
+    glm::vec3 boundsMin(0.0f);
+    glm::vec3 boundsMax(0.0f);
+    bool hasBounds = false;
+
+    if (m_SelectedEntity != entt::null && m_Registry.valid(m_SelectedEntity))
+    {
+        for (auto e : CollectSubtree(m_SelectedEntity))
+        {
+            if (!m_Registry.valid(e) || !m_Registry.any_of<MeshComponent>(e))
+                continue;
+
+            const MeshHandle h = m_Registry.get<MeshComponent>(e).MeshId;
+            if (!MeshLibrary::Get().IsValid(h))
+                continue;
+
+            const MeshGPU& mesh = MeshLibrary::Get().Get(h);
+            const glm::mat4 world = TransformSystem::GetWorldMatrix(m_Registry, e);
+
+            for (int corner = 0; corner < 8; ++corner)
+            {
+                const glm::vec3 local(
+                    (corner & 1) ? mesh.AABBMax.x : mesh.AABBMin.x,
+                    (corner & 2) ? mesh.AABBMax.y : mesh.AABBMin.y,
+                    (corner & 4) ? mesh.AABBMax.z : mesh.AABBMin.z);
+                const glm::vec3 p = glm::vec3(world * glm::vec4(local, 1.0f));
+
+                if (!hasBounds)
+                {
+                    boundsMin = boundsMax = p;
+                    hasBounds = true;
+                }
+                else
+                {
+                    boundsMin = glm::min(boundsMin, p);
+                    boundsMax = glm::max(boundsMax, p);
+                }
+            }
+        }
+    }
+
+    glm::vec3 target(0.0f);
+    float radius = 0.5f;
+
+    if (hasBounds)
+    {
+        target = (boundsMin + boundsMax) * 0.5f;
+        radius = glm::max(glm::length(boundsMax - boundsMin) * 0.5f, 0.05f);
+    }
+    else if (m_SelectedEntity != entt::null && m_Registry.valid(m_SelectedEntity))
+    {
+        target = glm::vec3(TransformSystem::GetWorldMatrix(m_Registry, m_SelectedEntity)[3]);
+    }
+
+    
+    
+    const glm::vec3 forward = camTransform.Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+    const float fovRad = glm::radians(glm::clamp(camera.FOV, 1.0f, 179.0f));
+    const float distance = radius / glm::max(glm::tan(fovRad * 0.5f), 0.01f) * 1.8f;
+
+    camTransform.Position = target - forward * glm::max(distance, 0.1f);
+
+    BINAX_LOG_INFO("Focus camera on '{0}'",
+                   (m_SelectedEntity == entt::null)
+                       ? std::string("<origin>")
+                       : GetEntityName(m_SelectedEntity));
+}
+
+bool EditorUI::IsNameTaken(const std::string& name) const
+{
+    auto view = m_Registry.view<NameComponent>();
+    for (auto entity : view)
+    {
+        if (view.get<NameComponent>(entity).Name == name)
+            return true;
+    }
+    return false;
+}
+
+std::string EditorUI::MakeUniqueName(const std::string& sourceName) const
+{
+    std::string base = sourceName;
+
+    
+    
+    auto stripNumericSuffix = [](std::string& s, char separator)
+    {
+        const size_t pos = s.find_last_of(separator);
+        if (pos == std::string::npos || pos == 0 || pos + 1 >= s.size())
+            return;
+        for (size_t i = pos + 1; i < s.size(); ++i)
+        {
+            if (!std::isdigit(static_cast<unsigned char>(s[i])))
+                return;
+        }
+        s = s.substr(0, pos);
+    };
+
+    stripNumericSuffix(base, '_');
+    stripNumericSuffix(base, ' ');
+
+    if (base.empty())
+        base = "Object";
+
+    for (int index = 1; index < 100000; ++index)
+    {
+        std::string candidate = base + "_" + std::to_string(index);
+        if (!IsNameTaken(candidate))
+            return candidate;
+    }
+
+    return base;
+}
+
+
+
+
 
 void EditorUI::Draw()
 {
@@ -280,9 +628,27 @@ void EditorUI::Draw()
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
-// ---------------------------------------------------------------------------
-// Viewport + Gizmo
-// ---------------------------------------------------------------------------
+
+
+
+
+void EditorUI::SyncViewportSize()
+{
+    if (!m_Viewport)
+        return;
+
+    const uint32_t w = static_cast<uint32_t>(m_PendingViewportW);
+    const uint32_t h = static_cast<uint32_t>(m_PendingViewportH);
+    if (w == 0 || h == 0)
+        return;
+
+    const glm::vec2 current = m_Viewport->GetSize();
+    if (static_cast<uint32_t>(current.x) != w ||
+        static_cast<uint32_t>(current.y) != h)
+    {
+        m_Viewport->Resize(w, h);
+    }
+}
 
 void EditorUI::DrawViewport()
 {
@@ -296,6 +662,60 @@ void EditorUI::DrawViewport()
 
     if (ImGui::Begin("Viewport", nullptr, flags))
     {
+        
+        auto OpButton = [&](const char* label, int op)
+        {
+            const bool active = (m_GizmoOperation == op);
+            if (active)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            }
+            if (ImGui::Button(label))
+                m_GizmoOperation = op;
+            if (active)
+                ImGui::PopStyleColor();
+        };
+
+        OpButton("Move", 0);
+        ImGui::SameLine();
+        OpButton("Rotate", 1);
+        ImGui::SameLine();
+        OpButton("Scale", 2);
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        if (ImGui::Button(m_GizmoMode == 0 ? "World" : "Local"))
+            m_GizmoMode = (m_GizmoMode == 0) ? 1 : 0;
+
+        
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        ImGui::Checkbox("Snap", &m_SnapEnabled);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Grid snapping for the current gizmo mode");
+
+        if (m_SnapEnabled)
+        {
+            float& step = SnapStep();
+            const bool rotation = (m_GizmoOperation == 1);
+
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(80.0f);
+            ImGui::DragFloat("##SnapStep", &step,
+                             rotation ? 0.5f : 0.01f,
+                             rotation ? 1.0f : 0.01f,
+                             rotation ? 180.0f : 100.0f,
+                             rotation ? "%.1f" : "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Snap step: units (move), degrees (rotate), factor (scale)");
+            ImGui::SameLine();
+            ImGui::TextDisabled(rotation ? "deg" : (m_GizmoOperation == 2 ? "x" : "units"));
+        }
+
+        ImGui::Separator();
+
         ImVec2 vpPos  = ImGui::GetCursorScreenPos();
         ImVec2 vpSize = ImGui::GetContentRegionAvail();
 
@@ -308,11 +728,20 @@ void EditorUI::DrawViewport()
 
         if (vpSize.x > 0 && vpSize.y > 0)
         {
-            if ((uint32_t)vpSize.x != (uint32_t)m_Viewport->GetSize().x ||
-                (uint32_t)vpSize.y != (uint32_t)m_Viewport->GetSize().y)
-            {
-                m_Viewport->Resize((uint32_t)vpSize.x, (uint32_t)vpSize.y);
-            }
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            const ImVec2 fbScale = ImGui::GetIO().DisplayFramebufferScale;
+            m_PendingViewportW = vpSize.x * (fbScale.x > 0.0f ? fbScale.x : 1.0f);
+            m_PendingViewportH = vpSize.y * (fbScale.y > 0.0f ? fbScale.y : 1.0f);
         }
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -335,6 +764,16 @@ void EditorUI::DrawViewport()
 
     ImGui::End();
     ImGui::PopStyleVar();
+}
+
+float& EditorUI::SnapStep()
+{
+    switch (m_GizmoOperation)
+    {
+    case 1:  return m_SnapRotate;    
+    case 2:  return m_SnapScale;     
+    default: return m_SnapTranslate; 
+    }
 }
 
 void EditorUI::DrawGizmo()
@@ -379,7 +818,17 @@ void EditorUI::DrawGizmo()
                       m_ViewportScreenW, m_ViewportScreenH);
 
     auto& transform = m_Registry.get<Transform>(m_SelectedEntity);
-    glm::mat4 model = transform.GetModelMatrix();
+
+    
+    
+    glm::mat4 parentWorld = glm::mat4(1.0f);
+    if (const auto* pc = m_Registry.try_get<ParentComponent>(m_SelectedEntity))
+    {
+        if (pc->Parent != entt::null && m_Registry.valid(pc->Parent))
+            parentWorld = TransformSystem::GetWorldMatrix(m_Registry, pc->Parent);
+    }
+
+    glm::mat4 model = TransformSystem::GetWorldMatrix(m_Registry, m_SelectedEntity);
 
     ImGuizmo::OPERATION op = ImGuizmo::TRANSLATE;
     switch (m_GizmoOperation)
@@ -397,19 +846,87 @@ void EditorUI::DrawGizmo()
 
     if (manipulated)
     {
+        glm::mat4 local = glm::inverse(parentWorld) * model;
+
         glm::vec3 translation, scale, skew;
         glm::vec4 perspective;
         glm::quat rotation;
-        glm::decompose(model, scale, rotation, translation, skew, perspective);
-        transform.Position = translation;
-        transform.Rotation = rotation;
+        glm::decompose(local, scale, rotation, translation, skew, perspective);
+
+        
+        
+        
+        if (m_SnapEnabled)
+        {
+            const float step = SnapStep();
+            if (step > 1e-5f)
+            {
+                if (m_GizmoOperation == 0)
+                {
+                    glm::vec3 worldPos(model[3]);
+                    worldPos = glm::round(worldPos / step) * step;
+
+                    glm::mat4 snappedWorld = model;
+                    snappedWorld[3] = glm::vec4(worldPos, 1.0f);
+
+                    const glm::mat4 snappedLocal =
+                        glm::inverse(parentWorld) * snappedWorld;
+                    glm::decompose(snappedLocal, scale, rotation, translation,
+                                   skew, perspective);
+                }
+                else if (m_GizmoOperation == 1)
+                {
+                    const glm::vec3 euler = glm::degrees(glm::eulerAngles(rotation));
+                    rotation = glm::quat(glm::radians(glm::round(euler / step) * step));
+                }
+                else
+                {
+                    const glm::vec3 snapped = glm::round(scale / step) * step;
+                    auto keepNonZero = [step](float v)
+                    {
+                        
+                        if (std::abs(v) < step)
+                            return (v < 0.0f) ? -step : step;
+                        return v;
+                    };
+                    scale.x = keepNonZero(snapped.x);
+                    scale.y = keepNonZero(snapped.y);
+                    scale.z = keepNonZero(snapped.z);
+                }
+            }
+        }
+
+        
+        
+        
+        constexpr float kMinScale = 1e-4f;
+        auto clampScale = [&](float s)
+        {
+            if (!std::isfinite(s) || std::abs(s) < kMinScale)
+                return (s < 0.0f) ? -kMinScale : kMinScale;
+            return s;
+        };
+        scale.x = clampScale(scale.x);
+        scale.y = clampScale(scale.y);
+        scale.z = clampScale(scale.z);
+
+        if (std::isfinite(translation.x) && std::isfinite(translation.y) &&
+            std::isfinite(translation.z))
+            transform.Position = translation;
+
+        
+        
+        const float qlen2 = rotation.w * rotation.w + rotation.x * rotation.x +
+                            rotation.y * rotation.y + rotation.z * rotation.z;
+        transform.Rotation = (qlen2 > 1e-12f) ? glm::normalize(rotation)
+                                              : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         transform.Scale    = scale;
     }
 }
 
-// ---------------------------------------------------------------------------
-// Hierarchy / Inspector
-// ---------------------------------------------------------------------------
+
+
+
 
 void EditorUI::DrawCreateObjectDropdown()
 {
@@ -435,36 +952,179 @@ void EditorUI::DrawHierarchy()
     DrawCreateObjectDropdown();
     ImGui::Separator();
 
-    auto view = m_Registry.view<NameComponent>();
-    for (auto entity : view)
+    
+    if (m_FocusSearch)
     {
-        std::string label = GetEntityName(entity);
-        bool isSelected = (m_SelectedEntity == entity);
-        bool isCamera   = IsEditorCamera(entity);
-        bool isSkybox   = m_Registry.any_of<SkyboxComponent>(entity);
-        bool isProtected = isCamera || isSkybox;
+        ImGui::SetKeyboardFocusHere();
+        m_FocusSearch = false;
+    }
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -
+                            (m_HierarchySearch[0] ? 24.0f : 0.0f));
+    ImGui::InputTextWithHint("##HierarchySearch", "Search...",
+                             m_HierarchySearch, IM_ARRAYSIZE(m_HierarchySearch));
+    if (m_HierarchySearch[0] != '\0')
+    {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("X"))
+            m_HierarchySearch[0] = '\0';
+    }
+    ImGui::Separator();
 
-        ImGui::PushID((int)entity);
-        if (ImGui::Selectable(label.c_str(), &isSelected))
-            m_SelectedEntity = entity;
+    if (m_HierarchySearch[0] != '\0')
+    {
+        const std::string filter = ToLowerAscii(m_HierarchySearch);
+        bool anyMatch = false;
 
-        if (ImGui::BeginPopupContextItem())
+        for (auto entity : m_Registry.view<NameComponent>())
         {
-            if (!isProtected)
+            const std::string& name = m_Registry.get<NameComponent>(entity).Name;
+            if (ToLowerAscii(name).find(filter) == std::string::npos)
+                continue;
+
+            anyMatch = true;
+            ImGui::PushID(static_cast<int>(entity));
+            if (ImGui::Selectable(name.c_str(), m_SelectedEntity == entity))
+                m_SelectedEntity = entity;
+            ImGui::PopID();
+        }
+
+        if (!anyMatch)
+            ImGui::TextDisabled("No matches");
+    }
+    else
+    {
+        
+        
+        std::unordered_map<entt::entity, std::vector<entt::entity>> children;
+        std::vector<entt::entity> roots;
+
+        for (auto entity : m_Registry.view<NameComponent>())
+        {
+            const auto* pc = m_Registry.try_get<ParentComponent>(entity);
+            if (pc && pc->Parent != entt::null && pc->Parent != entity &&
+                m_Registry.valid(pc->Parent) &&
+                m_Registry.any_of<NameComponent>(pc->Parent))
             {
-                if (ImGui::MenuItem("Duplicate Object")) DuplicateEntity(entity);
-                if (ImGui::MenuItem("Delete Object"))    DeleteEntity(entity);
+                children[pc->Parent].push_back(entity);
             }
             else
             {
-                ImGui::Text("System object - cannot modify");
+                roots.push_back(entity);
             }
-            ImGui::EndPopup();
         }
-        ImGui::PopID();
+
+        std::unordered_set<entt::entity> visited;
+        for (auto entity : roots)
+            DrawEntityRow(entity, children, visited);
+
+        
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        ImGui::Dummy(ImVec2(avail.x > 1.0f ? avail.x : 1.0f, 28.0f));
+        if (ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("BINAX_ENTITY"))
+            {
+                const auto dragged = *static_cast<const entt::entity*>(payload->Data);
+                SetParent(dragged, entt::null);
+            }
+            ImGui::EndDragDropTarget();
+        }
+    }
+
+    
+    if (m_PendingDuplicate != entt::null)
+    {
+        const entt::entity e = m_PendingDuplicate;
+        m_PendingDuplicate = entt::null;
+        DuplicateEntity(e);
+    }
+    else if (m_PendingDelete != entt::null)
+    {
+        const entt::entity e = m_PendingDelete;
+        m_PendingDelete = entt::null;
+        DeleteEntity(e);
     }
 
     ImGui::End();
+}
+
+void EditorUI::DrawEntityRow(
+    entt::entity entity,
+    const std::unordered_map<entt::entity, std::vector<entt::entity>>& children,
+    std::unordered_set<entt::entity>& visited)
+{
+    if (!m_Registry.valid(entity) || !m_Registry.any_of<NameComponent>(entity))
+        return;
+    if (!visited.insert(entity).second)
+        return;   
+
+    const auto childIt = children.find(entity);
+    const bool hasChildren = (childIt != children.end() && !childIt->second.empty());
+
+    ImGui::PushID(static_cast<int>(entity));
+
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
+                               ImGuiTreeNodeFlags_SpanAvailWidth |
+                               ImGuiTreeNodeFlags_DefaultOpen;
+    if (m_SelectedEntity == entity)
+        flags |= ImGuiTreeNodeFlags_Selected;
+    if (!hasChildren)
+        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+
+    const bool isProtected = IsProtectedEntity(entity);
+
+    const bool open = ImGui::TreeNodeEx("##node", flags, "%s",
+                                        GetEntityName(entity).c_str());
+
+    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+        m_SelectedEntity = entity;
+
+    
+    if (!isProtected && ImGui::BeginDragDropSource())
+    {
+        ImGui::SetDragDropPayload("BINAX_ENTITY", &entity, sizeof(entt::entity));
+        ImGui::TextUnformatted(GetEntityName(entity).c_str());
+        ImGui::EndDragDropSource();
+    }
+
+    
+    if (!isProtected && ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("BINAX_ENTITY"))
+        {
+            const auto dragged = *static_cast<const entt::entity*>(payload->Data);
+            if (dragged != entity)
+                SetParent(dragged, entity);
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    if (ImGui::BeginPopupContextItem())
+    {
+        if (!isProtected)
+        {
+            if (ImGui::MenuItem("Duplicate Object")) m_PendingDuplicate = entity;
+            if (ImGui::MenuItem("Delete Object"))    m_PendingDelete = entity;
+            if (m_Registry.any_of<ParentComponent>(entity))
+            {
+                if (ImGui::MenuItem("Unparent")) SetParent(entity, entt::null);
+            }
+        }
+        else
+        {
+            ImGui::Text("System object - cannot modify");
+        }
+        ImGui::EndPopup();
+    }
+
+    if (open && hasChildren)
+    {
+        for (auto child : childIt->second)
+            DrawEntityRow(child, children, visited);
+        ImGui::TreePop();
+    }
+
+    ImGui::PopID();
 }
 
 void EditorUI::DrawInspector()
@@ -497,7 +1157,12 @@ void EditorUI::DrawInspector()
 
         if (canRemove)
         {
-            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60.0f);
+            
+            
+            
+            const float buttonW = ImGui::CalcTextSize("Remove").x +
+                                  ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SameLine(ImGui::GetContentRegionMax().x - buttonW);
             if (ImGui::SmallButton("Remove"))
                 pendingRemove = entry.Name;
         }
@@ -515,13 +1180,34 @@ void EditorUI::DrawInspector()
         if (entry.Name == "Material" &&
             m_Registry.any_of<MaterialComponent>(m_SelectedEntity))
         {
-            auto h = m_Registry.get<MaterialComponent>(m_SelectedEntity).MaterialId;
-            if (h != kInvalidMaterial)
+            auto& mc  = m_Registry.get<MaterialComponent>(m_SelectedEntity);
+            auto& lib = MaterialLibrary::Get();
+
+            
+            const std::string current = lib.IsValid(mc.MaterialId)
+                                            ? lib.GetName(mc.MaterialId)
+                                            : std::string("(none)");
+
+            ImGui::SetNextItemWidth(220.0f);
+            if (ImGui::BeginCombo("Material Asset", current.c_str()))
             {
-                ImGui::Text("Name: %s", MaterialLibrary::Get().GetName(h).c_str());
+                const auto& editData = lib.GetEditData();
+                for (uint32_t i = 0; i < (uint32_t)editData.size(); ++i)
+                {
+                    const bool selected = (mc.MaterialId == i);
+                    if (ImGui::Selectable(editData[i].Name.c_str(), selected))
+                        mc.MaterialId = i;
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+
+            if (lib.IsValid(mc.MaterialId))
+            {
                 if (ImGui::SmallButton("Edit Material..."))
                 {
-                    m_EditingMaterial = h;
+                    m_EditingMaterial    = mc.MaterialId;
                     m_ShowMaterialEditor = true;
                 }
             }
@@ -565,15 +1251,19 @@ void EditorUI::DrawAddComponentMenu()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Material editor
-// ---------------------------------------------------------------------------
+
+
+
 
 void EditorUI::DrawMaterialEditor()
 {
-    if (m_EditingMaterial == kInvalidMaterial)
+    
+    
+    
+    if (!MaterialLibrary::Get().IsValid(m_EditingMaterial))
     {
         m_ShowMaterialEditor = false;
+        m_EditingMaterial = kInvalidMaterial;
         return;
     }
 
@@ -682,9 +1372,9 @@ std::string display = currentPath.empty()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Create / duplicate
-// ---------------------------------------------------------------------------
+
+
+
 
 void EditorUI::CreateEmptyEntity()
 {
@@ -710,17 +1400,20 @@ void EditorUI::CreateCubeEntity()
     for (auto e : nameView)
     {
         const std::string& n = nameView.get<NameComponent>(e).Name;
-        constexpr const char* kPrefix = "Cube ";
+        
         constexpr size_t kPrefixLen = 5;
-        if (n.size() > kPrefixLen && n.compare(0, kPrefixLen, kPrefix) == 0)
+        if (n.size() <= kPrefixLen)
+            continue;
+        if (n.compare(0, kPrefixLen, "Cube ") != 0 &&
+            n.compare(0, kPrefixLen, "Cube_") != 0)
+            continue;
+
+        try
         {
-            try
-            {
-                const int v = std::stoi(n.substr(kPrefixLen));
-                if (v >= nextIndex) nextIndex = v + 1;
-            }
-            catch (...) {}
+            const int v = std::stoi(n.substr(kPrefixLen));
+            if (v >= nextIndex) nextIndex = v + 1;
         }
+        catch (...) {}
     }
 
     entt::entity entity = m_Registry.create();
@@ -736,7 +1429,14 @@ void EditorUI::CreateCubeEntity()
 
     m_Registry.emplace<MeshComponent>(entity, MeshComponent{ cube });
 
+    
+    
+    
+    
     std::string matName = "CubeMaterial_" + std::to_string(nextIndex);
+    for (int suffix = 1; MaterialLibrary::Get().Find(matName) != kInvalidMaterial; ++suffix)
+        matName = "CubeMaterial_" + std::to_string(nextIndex) + "_" + std::to_string(suffix);
+
     MaterialGPU gpu{};
     gpu.AlbedoRoughness = glm::vec4(1.0f, 0.5f, 0.2f, 0.4f);
     gpu.MetallicAOEms   = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
@@ -748,46 +1448,37 @@ void EditorUI::CreateCubeEntity()
 
     m_Registry.emplace<MaterialComponent>(entity, MaterialComponent{ mat });
 
-    m_Registry.emplace<NameComponent>(entity, "Cube " + std::to_string(nextIndex));
+    m_Registry.emplace<NameComponent>(entity, MakeUniqueName("Cube"));
 
     m_SelectedEntity = entity;
     BINAX_LOG_INFO("Created cube entity {0} at ({1:.2f}, 0, {2:.2f})",
                    (uint32_t)entity, offsetX, offsetZ);
 }
 
-void EditorUI::DuplicateEntity(entt::entity entity)
+entt::entity EditorUI::DuplicateSingle(entt::entity src)
 {
-    if (IsEditorCamera(entity)) { BINAX_LOG_WARN("Cannot duplicate EditorCamera"); return; }
-    if (m_Registry.any_of<SkyboxComponent>(entity)) { BINAX_LOG_WARN("Cannot duplicate Skybox"); return; }
+    const entt::entity dst = m_Registry.create();
 
-    if (!m_Registry.valid(entity) || !m_Registry.any_of<Transform>(entity))
+    auto snapshot = Serialization::PropertySerializer::SerializeEntity(m_Registry, src);
+    Serialization::PropertySerializer::DeserializeEntity(m_Registry, dst, snapshot);
+
+    if (m_Registry.any_of<EditorCameraComponent>(dst))
+        m_Registry.remove<EditorCameraComponent>(dst);
+
+    
+    if (m_Registry.any_of<MeshComponent>(src))
     {
-        BINAX_LOG_WARN("Invalid entity to duplicate");
-        return;
+        if (!m_Registry.any_of<MeshComponent>(dst))
+            m_Registry.emplace<MeshComponent>(dst);
+        m_Registry.get<MeshComponent>(dst).MeshId =
+            m_Registry.get<MeshComponent>(src).MeshId;
     }
 
-    entt::entity newEntity = m_Registry.create();
-
-    auto snapshot = Serialization::PropertySerializer::SerializeEntity(m_Registry, entity);
-    Serialization::PropertySerializer::DeserializeEntity(m_Registry, newEntity, snapshot);
-
-    if (m_Registry.any_of<EditorCameraComponent>(newEntity))
-        m_Registry.remove<EditorCameraComponent>(newEntity);
-
-    // Mesh
-    if (m_Registry.any_of<MeshComponent>(entity))
+    
+    if (m_Registry.any_of<MaterialComponent>(src))
     {
-        if (!m_Registry.any_of<MeshComponent>(newEntity))
-            m_Registry.emplace<MeshComponent>(newEntity);
-        m_Registry.get<MeshComponent>(newEntity).MeshId =
-            m_Registry.get<MeshComponent>(entity).MeshId;
-    }
-
-    // Material: независимая копия (GPU + пути к текстурам).
-    if (m_Registry.any_of<MaterialComponent>(entity))
-    {
-        auto srcH = m_Registry.get<MaterialComponent>(entity).MaterialId;
-        if (srcH != kInvalidMaterial)
+        auto srcH = m_Registry.get<MaterialComponent>(src).MaterialId;
+        if (MaterialLibrary::Get().IsValid(srcH))
         {
             std::string baseName = MaterialLibrary::Get().GetName(srcH);
             std::string newName  = baseName + "_copy";
@@ -798,28 +1489,91 @@ void EditorUI::DuplicateEntity(entt::entity entity)
             MaterialHandle nh = MaterialLibrary::Get().Copy(newName, srcH);
             MaterialLibrary::Get().Flush();
 
-            if (!m_Registry.any_of<MaterialComponent>(newEntity))
-                m_Registry.emplace<MaterialComponent>(newEntity);
-            m_Registry.get<MaterialComponent>(newEntity).MaterialId = nh;
+            if (!m_Registry.any_of<MaterialComponent>(dst))
+                m_Registry.emplace<MaterialComponent>(dst);
+            m_Registry.get<MaterialComponent>(dst).MaterialId = nh;
         }
     }
 
-    if (m_Registry.any_of<Transform>(newEntity))
-        m_Registry.get<Transform>(newEntity).Position += glm::vec3(1.5f, 0.0f, 0.0f);
+    if (m_Registry.any_of<CameraComponent>(dst))
+        m_Registry.get<CameraComponent>(dst).Primary = false;
 
-    if (m_Registry.any_of<CameraComponent>(newEntity))
-        m_Registry.get<CameraComponent>(newEntity).Primary = false;
+    if (m_Registry.any_of<NameComponent>(dst))
+    {
+        
+        m_Registry.get<NameComponent>(dst).Name =
+            MakeUniqueName(m_Registry.get<NameComponent>(dst).Name);
+    }
 
-    if (m_Registry.any_of<NameComponent>(newEntity))
-        m_Registry.get<NameComponent>(newEntity).Name += " (copy)";
-
-    m_SelectedEntity = newEntity;
-    BINAX_LOG_INFO("Duplicated entity {} -> {}", (uint32_t)entity, (uint32_t)newEntity);
+    return dst;
 }
 
-// ---------------------------------------------------------------------------
-// Style (без изменений)
-// ---------------------------------------------------------------------------
+void EditorUI::DuplicateEntity(entt::entity entity)
+{
+    if (IsProtectedEntity(entity))
+    {
+        BINAX_LOG_WARN("Cannot duplicate system entity");
+        return;
+    }
+
+    if (!m_Registry.valid(entity) || !m_Registry.any_of<Transform>(entity))
+    {
+        BINAX_LOG_WARN("Invalid entity to duplicate");
+        return;
+    }
+
+    
+    const std::vector<entt::entity> subtree = CollectSubtree(entity);
+
+    std::unordered_map<entt::entity, entt::entity> remap;
+    remap.reserve(subtree.size());
+
+    for (auto src : subtree)
+    {
+        if (!m_Registry.valid(src))
+            continue;
+        remap[src] = DuplicateSingle(src);
+    }
+
+    
+    for (auto src : subtree)
+    {
+        const auto dstIt = remap.find(src);
+        if (dstIt == remap.end())
+            continue;
+
+        const entt::entity dst = dstIt->second;
+        const auto* pc = m_Registry.try_get<ParentComponent>(src);
+        if (!pc || pc->Parent == entt::null)
+        {
+            m_Registry.remove<ParentComponent>(dst);
+            continue;
+        }
+
+        const auto parentIt = remap.find(pc->Parent);
+        const entt::entity newParent =
+            (parentIt != remap.end()) ? parentIt->second : pc->Parent;
+
+        m_Registry.get_or_emplace<ParentComponent>(dst).Parent = newParent;
+    }
+
+    
+    const auto rootIt = remap.find(entity);
+    if (rootIt != remap.end())
+    {
+        if (m_Registry.any_of<Transform>(rootIt->second))
+            m_Registry.get<Transform>(rootIt->second).Position += glm::vec3(1.5f, 0.0f, 0.0f);
+
+        m_SelectedEntity = rootIt->second;
+    }
+
+    BINAX_LOG_INFO("Duplicated '{0}' with {1} entities",
+                   GetEntityName(entity), remap.size());
+}
+
+
+
+
 
 void EditorUI::ApplyQtGrayStyle()
 {
@@ -877,21 +1631,64 @@ void EditorUI::ApplyQtGrayStyle()
 
 void EditorUI::LoadEditorFont()
 {
-    std::string fontPath = "resources/fonts/EditorFont.ttf";
-    std::ifstream file(fontPath);
-    if (!file.good())
+    
+    
+    const std::string fontPath = Paths::Resolve("resources/fonts/EditorFont.ttf");
+
+    
+    
+    
+    
+    
+    
+    std::FILE* file = OpenFileUtf8(fontPath);
+    if (!file)
     {
         BINAX_LOG_INFO("[Editor] Font not found at '{}', using default", fontPath);
         return;
     }
-    file.close();
+
+    std::fseek(file, 0, SEEK_END);
+    const long sz = std::ftell(file);
+    std::fseek(file, 0, SEEK_SET);
+
+    if (sz <= 0)
+    {
+        std::fclose(file);
+        BINAX_LOG_WARN("[Editor] Font file '{}' is empty", fontPath);
+        return;
+    }
+
+    char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(sz)));
+    if (!buf)
+    {
+        std::fclose(file);
+        BINAX_LOG_WARN("[Editor] Failed to allocate {} bytes for font", sz);
+        return;
+    }
+
+    const size_t readBytes = std::fread(buf, 1, static_cast<size_t>(sz), file);
+    std::fclose(file);
+
+    if (readBytes != static_cast<size_t>(sz))
+    {
+        std::free(buf);
+        BINAX_LOG_WARN("[Editor] Short read while loading font '{}'", fontPath);
+        return;
+    }
 
     ImGuiIO& io = ImGui::GetIO();
-    ImFont* font = io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 16.0f);
+    ImFont* font = io.Fonts->AddFontFromMemoryTTF(buf, static_cast<int>(sz), 16.0f);
     if (font)
     {
         BINAX_LOG_INFO("[Editor] Loaded font: {}", fontPath);
         io.FontDefault = font;
+    }
+    else
+    {
+        
+        std::free(buf);
+        BINAX_LOG_WARN("[Editor] Failed to parse font '{}'", fontPath);
     }
 }
 
@@ -903,4 +1700,4 @@ void EditorUI::AddPanelDrawer(std::function<void()> cb)
     m_ExtraPanelDrawers.push_back(std::move(cb));
 }
 
-} // namespace Binax
+} 
