@@ -5,12 +5,51 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <algorithm>
+#include <cstring>
 
 namespace Binax::Serialization {
 
 using namespace Reflect;
 
 namespace {
+
+
+
+size_t EnumSize(const PropertyInfo& p)
+{
+    return std::min<size_t>(p.Size ? p.Size : sizeof(int), sizeof(int));
+}
+
+int ReadEnum(const void* obj, const PropertyInfo& p)
+{
+    int value = 0;
+    std::memcpy(&value, p.GetRaw(obj), EnumSize(p));
+    return value;
+}
+
+void WriteEnum(void* obj, const PropertyInfo& p, int value)
+{
+    std::memcpy(p.GetRaw(obj), &value, EnumSize(p));
+}
+
+
+
+
+bool ReadFloats(const nlohmann::json& j, float* out, std::size_t count,
+                const char* propName)
+{
+    if (!j.is_array() || j.size() < count)
+    {
+        BINAX_LOG_WARN("Property '{}': expected array of {} numbers", propName, count);
+        return false;
+    }
+
+    for (std::size_t i = 0; i < count; ++i)
+        out[i] = j[i].get<float>();
+
+    return true;
+}
 
 nlohmann::json SerializeProperty(const void* obj, const PropertyInfo& p)
 {
@@ -24,7 +63,7 @@ nlohmann::json SerializeProperty(const void* obj, const PropertyInfo& p)
     case PK::Double: return *p.GetPtr<double>(obj);
     case PK::String: return *p.GetPtr<std::string>(obj);
     case PK::Asset:  return *p.GetPtr<std::string>(obj);
-    case PK::Enum:   return *p.GetPtr<int>(obj);
+    case PK::Enum:   return ReadEnum(obj, p);
     case PK::Vec2:   { auto* v = p.GetPtr<glm::vec2>(obj); return nlohmann::json{ v->x, v->y }; }
     case PK::Vec3:
     case PK::Color3: { auto* v = p.GetPtr<glm::vec3>(obj); return nlohmann::json{ v->x, v->y, v->z }; }
@@ -48,17 +87,21 @@ void DeserializeProperty(void* obj, const PropertyInfo& p, const nlohmann::json&
         case PK::Double: *p.GetPtr<double>(obj)      = j.get<double>();      break;
         case PK::String: *p.GetPtr<std::string>(obj) = j.get<std::string>(); break;
         case PK::Asset:  *p.GetPtr<std::string>(obj) = j.get<std::string>(); break;
-        case PK::Enum:   *p.GetPtr<int>(obj)         = j.get<int>();         break;
-        case PK::Vec2:   { auto* v = p.GetPtr<glm::vec2>(obj);
-                           v->x = j[0]; v->y = j[1]; break; }
+        case PK::Enum:   WriteEnum(obj, p, j.get<int>()); break;
+        case PK::Vec2:   { auto* v = p.GetPtr<glm::vec2>(obj); ReadFloats(j, &v->x, 2, p.Name.c_str()); break; }
         case PK::Vec3:
-        case PK::Color3: { auto* v = p.GetPtr<glm::vec3>(obj);
-                           v->x = j[0]; v->y = j[1]; v->z = j[2]; break; }
+        case PK::Color3: { auto* v = p.GetPtr<glm::vec3>(obj); ReadFloats(j, &v->x, 3, p.Name.c_str()); break; }
         case PK::Vec4:
-        case PK::Color4: { auto* v = p.GetPtr<glm::vec4>(obj);
-                           v->x = j[0]; v->y = j[1]; v->z = j[2]; v->w = j[3]; break; }
+        case PK::Color4: { auto* v = p.GetPtr<glm::vec4>(obj); ReadFloats(j, &v->x, 4, p.Name.c_str()); break; }
         case PK::Quat:   { auto* q = p.GetPtr<glm::quat>(obj);
-                           q->w = j[0]; q->x = j[1]; q->y = j[2]; q->z = j[3]; break; }
+                           
+                           float wxyz[4]{};
+                           if (ReadFloats(j, wxyz, 4, p.Name.c_str()))
+                           {
+                               q->w = wxyz[0]; q->x = wxyz[1];
+                               q->y = wxyz[2]; q->z = wxyz[3];
+                           }
+                           break; }
         default: break;
         }
     } catch (const std::exception& e) {
