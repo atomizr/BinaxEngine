@@ -16,15 +16,15 @@ class AssetRegistry
 public:
     static AssetRegistry& Get();
 
-    // --- 2D textures ---
+    
     const Texture* GetTexture(const std::string& path, bool srgb = true);
 
-    // Bindless handle (0, если texture не загрузилась или bindless недоступен).
+    
     TextureHandle GetTextureHandle(const std::string& path, bool srgb = true);
 
     void ReloadTexture(const std::string& path);
 
-    // --- Cubemaps ---
+    
     const Cubemap* GetCubemap(const std::array<std::string, 6>& paths, bool srgb = true);
     void ReloadCubemap(const std::array<std::string, 6>& paths);
 
@@ -32,6 +32,12 @@ public:
 
 private:
     AssetRegistry() = default;
+
+    
+    
+    
+    
+    static std::string MakeTextureKey(const std::string& path, bool srgb);
 
     static std::string MakeCubemapKey(const std::array<std::string, 6>& paths);
 
@@ -44,4 +50,4 @@ private:
     std::unordered_set<std::string> m_FailedCubemaps;
 };
 
-} // namespace Binax
+} 
