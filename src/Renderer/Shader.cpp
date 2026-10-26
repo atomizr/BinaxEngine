@@ -1,6 +1,7 @@
 
 #include "Shader.h"
 #include "../Utils/Log.h"
+#include "../Utils/Paths.h"
 #include <glad/glad.h>
 #include <fstream>
 #include <sstream>
@@ -13,10 +14,7 @@ namespace {
 
 std::string ReadTextFile(const std::string& path)
 {
-    
-std::filesystem::path p(
-    std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size()));
-std::ifstream file(p, std::ios::binary);
+    std::ifstream file(Paths::FromUtf8(path), std::ios::binary);
     if (!file.is_open())
         throw std::runtime_error("Failed to open shader file: " + path);
 
@@ -33,23 +31,29 @@ std::ifstream file(p, std::ios::binary);
 
 
 
-Shader::Shader(const std::string& vertexSrc, const std::string& fragmentSrc)
+Shader::Shader(const std::string& vertexSrc, const std::string& fragmentSrc,
+               Stage stage)
+    : m_Stage(stage)
 {
-    m_RendererID = BuildProgram(vertexSrc, fragmentSrc);
-    
+    m_RendererID = BuildProgram(vertexSrc, fragmentSrc, m_Stage);
 }
 
 std::unique_ptr<Shader> Shader::FromFiles(const std::string& vertexPath,
-                                          const std::string& fragmentPath)
+                                          const std::string& fragmentPath,
+                                          Stage stage)
 {
     std::string vsrc = ReadTextFile(vertexPath);
-    std::string fsrc = ReadTextFile(fragmentPath);
+    std::string fsrc = (stage == Stage::Compute) ? std::string{} : ReadTextFile(fragmentPath);
 
-    auto shader = std::unique_ptr<Shader>(new Shader(vsrc, fsrc));
+    auto shader = std::unique_ptr<Shader>(new Shader(vsrc, fsrc, stage));
     shader->m_VertexPath   = vertexPath;
     shader->m_FragmentPath = fragmentPath;
 
-    BINAX_LOG_INFO("Shader loaded: {0} + {1}", vertexPath, fragmentPath);
+    if (stage == Stage::Compute)
+        BINAX_LOG_INFO("Compute shader loaded: {0}", vertexPath);
+    else
+        BINAX_LOG_INFO("Shader loaded: {0} + {1}", vertexPath, fragmentPath);
+
     return shader;
 }
 
@@ -64,13 +68,14 @@ void Shader::Reload()
     try
     {
         const std::string vsrc = ReadTextFile(m_VertexPath);
-        const std::string fsrc = ReadTextFile(m_FragmentPath);
+        const std::string fsrc = (m_Stage == Stage::Compute)
+                                     ? std::string{}
+                                     : ReadTextFile(m_FragmentPath);
 
         
         
-        const uint32_t newID = BuildProgram(vsrc, fsrc);
+        const uint32_t newID = BuildProgram(vsrc, fsrc, m_Stage);
 
-        
         if (m_RendererID != 0)
             glDeleteProgram(m_RendererID);
         m_RendererID = newID;
@@ -80,8 +85,6 @@ void Shader::Reload()
     }
     catch (const std::exception& e)
     {
-        
-        
         BINAX_LOG_ERROR("Shader reload failed, keeping old program: {0}", e.what());
     }
 }
@@ -109,6 +112,7 @@ int Shader::GetUniformLocation(const std::string& name) const
 }
 
 void Shader::SetInt  (const std::string& n, int v)               { glUniform1i(GetUniformLocation(n), v); }
+void Shader::SetUInt (const std::string& n, uint32_t v)          { glUniform1ui(GetUniformLocation(n), v); }
 void Shader::SetFloat(const std::string& n, float v)             { glUniform1f(GetUniformLocation(n), v); }
 void Shader::SetVec2 (const std::string& n, const glm::vec2& v)  { glUniform2fv(GetUniformLocation(n), 1, &v[0]); }
 void Shader::SetVec3 (const std::string& n, const glm::vec3& v)  { glUniform3fv(GetUniformLocation(n), 1, &v[0]); }
@@ -118,10 +122,46 @@ void Shader::SetMat4 (const std::string& n, const glm::mat4& v)  { glUniformMatr
 
 
 uint32_t Shader::BuildProgram(const std::string& vertexSrc,
-                              const std::string& fragmentSrc)
+                              const std::string& fragmentSrc,
+                              Stage stage)
 {
-    const uint32_t vs = CompileShader(GL_VERTEX_SHADER,   vertexSrc);
-    const uint32_t fs = CompileShader(GL_FRAGMENT_SHADER, fragmentSrc);
+    if (stage == Stage::Compute)
+    {
+        const uint32_t cs = CompileShader(GL_COMPUTE_SHADER, vertexSrc);
+        const uint32_t program = glCreateProgram();
+        glAttachShader(program, cs);
+        glLinkProgram(program);
+
+        int success = 0;
+        glGetProgramiv(program, GL_LINK_STATUS, &success);
+        if (!success)
+        {
+            char infoLog[1024];
+            glGetProgramInfoLog(program, 1024, nullptr, infoLog);
+            glDeleteProgram(program);
+            glDeleteShader(cs);
+            throw std::runtime_error(std::string("Compute program linking failed:\n") + infoLog);
+        }
+
+        glDeleteShader(cs);
+        return program;
+    }
+
+    const uint32_t vs = CompileShader(GL_VERTEX_SHADER, vertexSrc);
+
+    
+    
+    
+    uint32_t fs = 0;
+    try
+    {
+        fs = CompileShader(GL_FRAGMENT_SHADER, fragmentSrc);
+    }
+    catch (...)
+    {
+        glDeleteShader(vs);
+        throw;
+    }
 
     const uint32_t program = glCreateProgram();
     glAttachShader(program, vs);
@@ -158,7 +198,9 @@ uint32_t Shader::CompileShader(uint32_t type, const std::string& source)
     {
         char infoLog[1024];
         glGetShaderInfoLog(shader, 1024, nullptr, infoLog);
-        const char* typeName = (type == GL_VERTEX_SHADER) ? "Vertex" : "Fragment";
+        const char* typeName = (type == GL_VERTEX_SHADER)   ? "Vertex"
+                             : (type == GL_COMPUTE_SHADER)  ? "Compute"
+                                                            : "Fragment";
         glDeleteShader(shader);
         throw std::runtime_error(std::string(typeName) + " shader compilation failed:\n" + infoLog);
     }
