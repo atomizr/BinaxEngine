@@ -34,7 +34,14 @@ public:
 
     uint32_t GetWidth() const { return m_Width; }
     uint32_t GetHeight() const { return m_Height; }
-    float GetAspect() const { return static_cast<float>(m_Width) / static_cast<float>(m_Height); }
+    
+    
+    float GetAspect() const
+    {
+        return (m_Height > 0)
+                   ? static_cast<float>(m_Width) / static_cast<float>(m_Height)
+                   : 1.0f;
+    }
     GLFWwindow* GetGLFWWindow() const { return m_Window; }
 
     void SetEventCallbacks();
