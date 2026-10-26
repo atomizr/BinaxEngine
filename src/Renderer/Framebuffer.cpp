@@ -7,8 +7,10 @@ namespace Binax {
 Framebuffer::Framebuffer(uint32_t width, uint32_t height)
     : m_Width(width), m_Height(height)
 {
+    
+    
+    
     glGenFramebuffers(1, &m_RendererID);
-    Bind();
 }
 
 Framebuffer::~Framebuffer()
@@ -88,12 +90,25 @@ void Framebuffer::AttachDepthStencilTexture(uint32_t internalFormat, uint32_t fo
 
 bool Framebuffer::IsComplete() const
 {
-    return glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    
+    
+    GLint prev = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_RendererID);
+    const bool complete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prev));
+    return complete;
 }
 
 void Framebuffer::CheckStatus()
 {
+    GLint prev = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_RendererID);
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prev));
+
     if (status != GL_FRAMEBUFFER_COMPLETE)
     {
         BINAX_LOG_ERROR("Framebuffer incomplete: {0:x}", status);
