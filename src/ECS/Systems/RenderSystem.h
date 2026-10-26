@@ -14,6 +14,8 @@
 #include "Renderer/MeshLibrary.h"
 
 #include "ECS/Components/Transform.h"
+#include "ECS/Components/PrevTransform.h"
+#include "ECS/Components/WorldTransform.h"
 #include "ECS/Components/MeshComponent.h"
 #include "ECS/Components/MaterialComponent.h"
 #include "ECS/Components/LightComponent.h"
@@ -24,6 +26,11 @@ struct FrameRenderData
 {
     std::vector<InstanceGPU>          Instances;
     std::vector<DrawElementsIndirect> Draws;
+
+    
+    
+    
+    std::vector<uint32_t>             DrawVertexCounts;
 };
 
 class RenderSystem
@@ -33,33 +40,62 @@ public:
     {
         out.Instances.clear();
         out.Draws.clear();
+        out.DrawVertexCounts.clear();
 
         struct Candidate
         {
             MeshHandle     Mesh;
             MaterialHandle Material;
             glm::mat4      Model;
+            glm::mat4      PrevModel;
         };
 
         std::vector<Candidate> cands;
         auto view = registry.view<Transform, MeshComponent>();
         cands.reserve(view.size_hint());
+        out.Instances.reserve(view.size_hint());
+
+        
+        
+        
+        
+        const MaterialHandle fallbackMat =
+            MaterialLibrary::Get().GetOrCreateDefault();
 
         for (auto e : view)
         {
             const auto& mc = view.get<MeshComponent>(e);
-            if (mc.MeshId == kInvalidMesh) continue;
+            if (mc.MeshId == kInvalidMesh || !MeshLibrary::Get().IsValid(mc.MeshId))
+                continue;
 
             const auto& tr = view.get<Transform>(e);
 
             MaterialHandle mat = kInvalidMaterial;
             if (registry.any_of<MaterialComponent>(e))
                 mat = registry.get<MaterialComponent>(e).MaterialId;
+            if (mat == kInvalidMaterial)
+                mat = fallbackMat;
 
-            cands.push_back({ mc.MeshId, mat, tr.GetModelMatrix() });
+            const glm::mat4 model =
+                [&]() -> glm::mat4
+                {
+                    
+                    if (const auto* wt = registry.try_get<WorldTransform>(e))
+                        return wt->Matrix;
+                    return tr.GetModelMatrix();
+                }();
+
+            
+            
+            
+            auto& history = registry.get_or_emplace<PrevTransform>(e);
+            const glm::mat4 prevModel = history.Valid ? history.PrevModel : model;
+            history.PrevModel = model;
+            history.Valid     = true;
+
+            cands.push_back({ mc.MeshId, mat, model, prevModel });
         }
 
-        // Сортируем по mesh id → instance'ы одного меша идут подряд
         std::sort(cands.begin(), cands.end(),
                   [](const Candidate& a, const Candidate& b){ return a.Mesh < b.Mesh; });
 
@@ -78,6 +114,7 @@ public:
             {
                 InstanceGPU g{};
                 g.Model       = cands[k].Model;
+                g.PrevModel   = cands[k].PrevModel;
                 g.MaterialId  = cands[k].Material;
                 g.MeshId      = meshId;
                 g.BoneOffset  = 0;
@@ -95,6 +132,7 @@ public:
             cmd.BaseVertex    = mesh.BaseVertex;
             cmd.BaseInstance  = baseInstance;
             out.Draws.push_back(cmd);
+            out.DrawVertexCounts.push_back(mesh.VertexCount);
 
             i = j;
         }
@@ -102,6 +140,10 @@ public:
 
     static void CollectLights(entt::registry& registry, std::vector<GPULight>& out)
     {
+        
+        
+        
+        out.clear();
         out.reserve(kMaxLights);
 
         auto view = registry.view<Transform, LightComponent>();
@@ -132,9 +174,14 @@ public:
 
         if (out.empty())
         {
+            
+            
+            
+            
+            
             GPULight def;
             def.LightType = GPULight::Directional;
-            def.Direction = glm::normalize(glm::vec3(1.0f, 1.0f, 1.0f));
+            def.Direction = glm::normalize(glm::vec3(-1.0f, -1.0f, -1.0f));
             def.Color     = glm::vec3(1.0f, 0.9f, 0.8f);
             def.Intensity = 1.2f;
             out.push_back(def);
@@ -142,4 +189,4 @@ public:
     }
 };
 
-} // namespace Binax
+} 
