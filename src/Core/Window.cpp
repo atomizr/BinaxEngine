@@ -1,4 +1,3 @@
-
 #include "Window.h"
 #include "Input.h"
 #include "../Utils/Log.h"
@@ -32,6 +31,10 @@ Window::Window(const Props& props)
     m_Window = glfwCreateWindow(m_Width, m_Height, m_Title.c_str(), nullptr, nullptr);
     if (!m_Window)
     {
+        
+        
+        
+        s_GLFWInitialized = false;
         glfwTerminate();
         throw std::runtime_error("Failed to create GLFW window");
     }
@@ -59,26 +62,31 @@ void Window::SetEventCallbacks()
 {
     glfwSetKeyCallback(m_Window, [](GLFWwindow* window, int key, int scancode, int action, int mods)
     {
+        (void)window;
         Input::KeyCallback(key, scancode, action, mods);
     });
 
     glfwSetMouseButtonCallback(m_Window, [](GLFWwindow* window, int button, int action, int mods)
     {
+        (void)window;
         Input::MouseButtonCallback(button, action, mods);
     });
 
     glfwSetCursorPosCallback(m_Window, [](GLFWwindow* window, double xpos, double ypos)
     {
+        (void)window;
         Input::CursorPosCallback(xpos, ypos);
     });
 
     glfwSetScrollCallback(m_Window, [](GLFWwindow* window, double xoffset, double yoffset)
     {
+        (void)window;
         Input::ScrollCallback(xoffset, yoffset);
     });
 
     glfwSetWindowFocusCallback(m_Window, [](GLFWwindow* window, int focused)
     {
+        (void)window;
         Input::FocusCallback(focused);
     });
 
