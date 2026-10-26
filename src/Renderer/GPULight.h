@@ -21,8 +21,10 @@ struct GPULight
     glm::vec3 Color       = glm::vec3(1.0f);
     int       LightType   = Directional;
 
-    float     InnerCutoff = 0.8f;
-    float     OuterCutoff = 0.9f;
+    
+    
+    float     InnerCutoff = 0.9f;
+    float     OuterCutoff = 0.8f;
     float     _pad0       = 0.0f;
     float     _pad1       = 0.0f;
 };
