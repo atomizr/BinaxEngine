@@ -11,29 +11,36 @@ AssetRegistry& AssetRegistry::Get()
     return instance;
 }
 
-// ======================= 2D Texture =======================
+
+
+std::string AssetRegistry::MakeTextureKey(const std::string& path, bool srgb)
+{
+    return path + (srgb ? "|sRGB" : "|Linear");
+}
 
 const Texture* AssetRegistry::GetTexture(const std::string& path, bool srgb)
 {
     if (path.empty())
         return nullptr;
 
-    if (m_Failed.count(path))
+    const std::string key = MakeTextureKey(path, srgb);
+
+    if (m_Failed.count(key))
         return nullptr;
 
-    auto it = m_Textures.find(path);
+    auto it = m_Textures.find(key);
     if (it != m_Textures.end())
         return it->second.get();
 
     auto tex = Texture::LoadFromFile(path, srgb);
     if (!tex)
     {
-        m_Failed.insert(path);
+        m_Failed.insert(key);
         return nullptr;
     }
 
     const Texture* raw = tex.get();
-    m_Textures[path] = std::move(tex);
+    m_Textures[key] = std::move(tex);
     BINAX_LOG_INFO("AssetRegistry: loaded texture '{}'", path);
     return raw;
 }
@@ -43,7 +50,9 @@ TextureHandle AssetRegistry::GetTextureHandle(const std::string& path, bool srgb
     if (path.empty())
         return kInvalidTextureHandle;
 
-    auto it = m_Handles.find(path);
+    const std::string key = MakeTextureKey(path, srgb);
+
+    auto it = m_Handles.find(key);
     if (it != m_Handles.end())
         return it->second;
 
@@ -51,14 +60,14 @@ TextureHandle AssetRegistry::GetTextureHandle(const std::string& path, bool srgb
     {
         BINAX_LOG_WARN("AssetRegistry: bindless texture unsupported — "
                        "texture '{}' will be ignored", path);
-        m_Handles[path] = kInvalidTextureHandle;
+        m_Handles[key] = kInvalidTextureHandle;
         return kInvalidTextureHandle;
     }
 
     const Texture* tex = GetTexture(path, srgb);
     if (!tex || !tex->GetID())
     {
-        m_Handles[path] = kInvalidTextureHandle;
+        m_Handles[key] = kInvalidTextureHandle;
         return kInvalidTextureHandle;
     }
 
@@ -66,32 +75,41 @@ TextureHandle AssetRegistry::GetTextureHandle(const std::string& path, bool srgb
     if (h != 0 && !glIsTextureHandleResidentARB(h))
         glMakeTextureHandleResidentARB(h);
 
-    m_Handles[path] = (TextureHandle)h;
+    m_Handles[key] = (TextureHandle)h;
     BINAX_LOG_INFO("AssetRegistry: bindless handle for '{}' = {}", path,
                    (unsigned long long)h);
-    return m_Handles[path];
+    return m_Handles[key];
 }
 
 void AssetRegistry::ReloadTexture(const std::string& path)
 {
-    // Сначала сбросить resident-handle, если был
-    auto hit = m_Handles.find(path);
-    if (hit != m_Handles.end())
-    {
-        if (hit->second != kInvalidTextureHandle && GLAD_GL_ARB_bindless_texture)
-        {
-            GLuint64 h = (GLuint64)hit->second;
-            if (glIsTextureHandleResidentARB(h))
-                glMakeTextureHandleNonResidentARB(h);
-        }
-        m_Handles.erase(hit);
-    }
+    if (path.empty())
+        return;
 
-    m_Failed.erase(path);
-    m_Textures.erase(path);
+    
+    
+    for (const bool srgb : { true, false })
+    {
+        const std::string key = MakeTextureKey(path, srgb);
+
+        auto hit = m_Handles.find(key);
+        if (hit != m_Handles.end())
+        {
+            if (hit->second != kInvalidTextureHandle && GLAD_GL_ARB_bindless_texture)
+            {
+                GLuint64 h = (GLuint64)hit->second;
+                if (glIsTextureHandleResidentARB(h))
+                    glMakeTextureHandleNonResidentARB(h);
+            }
+            m_Handles.erase(hit);
+        }
+
+        m_Failed.erase(key);
+        m_Textures.erase(key);
+    }
 }
 
-// ======================= Cubemap =======================
+
 
 std::string AssetRegistry::MakeCubemapKey(const std::array<std::string, 6>& paths)
 {
@@ -141,7 +159,7 @@ void AssetRegistry::ReloadCubemap(const std::array<std::string, 6>& paths)
 
 void AssetRegistry::Clear()
 {
-    // Release bindless resident handles first — textures могут быть удалены
+    
     if (GLAD_GL_ARB_bindless_texture)
     {
         for (auto& [path, h] : m_Handles)
@@ -163,4 +181,4 @@ void AssetRegistry::Clear()
     m_FailedCubemaps.clear();
 }
 
-} // namespace Binax
+} 
