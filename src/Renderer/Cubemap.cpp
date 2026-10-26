@@ -1,5 +1,6 @@
 #include "Cubemap.h"
 #include "Utils/Log.h"
+#include "Utils/FileIO.h"
 
 #include <glad/glad.h>
 #include <stb/stb_image.h>
@@ -31,7 +32,6 @@ Cubemap& Cubemap::operator=(Cubemap&& other) noexcept
 
 std::unique_ptr<Cubemap> Cubemap::LoadFromFiles(const std::array<std::string, 6>& paths, bool srgb)
 {
-    // Cubemap faces are usually authored already in correct orientation.
     stbi_set_flip_vertically_on_load(0);
 
     auto cube = std::unique_ptr<Cubemap>(new Cubemap());
@@ -50,8 +50,20 @@ std::unique_ptr<Cubemap> Cubemap::LoadFromFiles(const std::array<std::string, 6>
             return nullptr;
         }
 
+        
+        std::FILE* file = OpenFileUtf8(paths[i]);
+        if (!file)
+        {
+            BINAX_LOG_ERROR("Cubemap face {}: cannot open '{}'", i, paths[i]);
+            glDeleteTextures(1, &cube->m_ID);
+            cube->m_ID = 0;
+            return nullptr;
+        }
+
         int w = 0, h = 0, ch = 0;
-        unsigned char* data = stbi_load(paths[i].c_str(), &w, &h, &ch, 0);
+        unsigned char* data = stbi_load_from_file(file, &w, &h, &ch, 0);
+        std::fclose(file);
+
         if (!data)
         {
             BINAX_LOG_ERROR("Cubemap face {} load failed '{}': {}",
@@ -62,14 +74,36 @@ std::unique_ptr<Cubemap> Cubemap::LoadFromFiles(const std::array<std::string, 6>
         }
 
         if (w != h)
-            BINAX_LOG_WARN("Cubemap face {} not square ({}x{})", i, w, h);
+        {
+            BINAX_LOG_ERROR("Cubemap face {} not square ({}x{})", i, w, h);
+            stbi_image_free(data);
+            glDeleteTextures(1, &cube->m_ID);
+            cube->m_ID = 0;
+            return nullptr;
+        }
 
-        if (faceSize == 0) faceSize = w;
+        if (faceSize == 0)
+            faceSize = w;
+        else if (w != faceSize)
+        {
+            
+            
+            BINAX_LOG_ERROR("Cubemap face {} size {}x{} != first face size {}x{}",
+                            i, w, h, faceSize, faceSize);
+            stbi_image_free(data);
+            glDeleteTextures(1, &cube->m_ID);
+            cube->m_ID = 0;
+            return nullptr;
+        }
 
         GLenum internalFmt = GL_RGB8;
         GLenum fmt         = GL_RGB;
-        if (ch == 4)      { internalFmt = srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8; fmt = GL_RGBA; }
+        
+        
+        if (ch == 1)      { internalFmt = GL_R8;  fmt = GL_RED; }
+        else if (ch == 2) { internalFmt = GL_RG8; fmt = GL_RG;  }
         else if (ch == 3) { internalFmt = srgb ? GL_SRGB8        : GL_RGB8;  fmt = GL_RGB;  }
+        else if (ch == 4) { internalFmt = srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8; fmt = GL_RGBA; }
 
         glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0,
                      internalFmt, w, h, 0, fmt, GL_UNSIGNED_BYTE, data);
@@ -110,4 +144,4 @@ void Cubemap::Unbind(uint32_t slot) const
     glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 }
 
-}
+} 
