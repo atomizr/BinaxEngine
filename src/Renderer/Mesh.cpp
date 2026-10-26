@@ -61,4 +61,4 @@ MeshData Mesh::CreateFullscreenQuad()
     return out;
 }
 
-} // namespace Binax
+} 
