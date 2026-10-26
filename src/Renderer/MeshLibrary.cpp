@@ -42,14 +42,16 @@ MeshHandle MeshLibrary::Add(const std::string& name,
     gpu.AABBMin = mn;
     gpu.AABBMax = mx;
 
-    // Смещения индексов локальные для меша → в общий IBO
-    const uint32_t base = gpu.BaseVertex;
-    std::vector<uint32_t> shifted;
-    shifted.reserve(indices.size());
-    for (uint32_t i : indices) shifted.push_back(i + base);
-
+    
+    
+    
+    
+    
+    
+    
+    
     m_CPUVertices.insert(m_CPUVertices.end(), vertices.begin(), vertices.end());
-    m_CPUIndices.insert(m_CPUIndices.end(), shifted.begin(), shifted.end());
+    m_CPUIndices.insert(m_CPUIndices.end(), indices.begin(), indices.end());
 
     MeshHandle h = (MeshHandle)m_Meshes.size();
     m_Meshes.push_back(gpu);
@@ -77,6 +79,12 @@ void MeshLibrary::Flush()
 {
     if (!m_Dirty && m_VAOReady) return;
 
+    
+    
+    
+    
+    
+    
     if (!m_VAOReady)
     {
         glGenVertexArrays(1, &m_VAO);
@@ -87,30 +95,32 @@ void MeshLibrary::Flush()
         glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_IBO);
 
-        // loc 0: Position (vec3, offset 0)
+        
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                               (void*)offsetof(Vertex, Position));
-        // loc 1: Normal
+        
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                               (void*)offsetof(Vertex, Normal));
-        // loc 2: UV
+        
         glEnableVertexAttribArray(2);
         glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                               (void*)offsetof(Vertex, UV));
-        // loc 3: BoneIndices (integer)
+        
         glEnableVertexAttribArray(3);
         glVertexAttribIPointer(3, 4, GL_UNSIGNED_BYTE, sizeof(Vertex),
                                (void*)offsetof(Vertex, BoneIndices));
-        // loc 4: BoneWeights (normalized u8 → [0,1])
+        
         glEnableVertexAttribArray(4);
         glVertexAttribPointer(4, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(Vertex),
                               (void*)offsetof(Vertex, BoneWeights));
 
-        glBindVertexArray(0);
         m_VAOReady = true;
     }
+
+    
+    glBindVertexArray(m_VAO);
 
     glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
     glBufferData(GL_ARRAY_BUFFER,
@@ -122,7 +132,11 @@ void MeshLibrary::Flush()
                  (GLsizeiptr)(m_CPUIndices.size() * sizeof(uint32_t)),
                  m_CPUIndices.data(), GL_STATIC_DRAW);
 
-    // SSBO (задел под Phase 4): readonly buffer MeshGPU[]
+    
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    
     if (m_MeshSSBO == 0)
         glGenBuffers(1, &m_MeshSSBO);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_MeshSSBO);
@@ -130,9 +144,6 @@ void MeshLibrary::Flush()
                  (GLsizeiptr)(m_Meshes.size() * sizeof(MeshGPU)),
                  m_Meshes.data(), GL_STATIC_DRAW);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 
     m_Dirty = false;
 }
@@ -153,4 +164,4 @@ void MeshLibrary::Clear()
     m_VAOReady = false;
 }
 
-} // namespace Binax
+} 
