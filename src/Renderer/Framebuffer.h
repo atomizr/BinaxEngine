@@ -29,8 +29,14 @@ public:
     void AttachDepthStencilTexture(uint32_t internalFormat, uint32_t format,
                                    uint32_t type);
 
-    uint32_t GetColorAttachment(uint32_t index) const { return m_ColorAttachments[index].TextureID; }
+    uint32_t GetColorAttachment(uint32_t index) const
+    {
+        return index < m_ColorAttachments.size()
+                   ? m_ColorAttachments[index].TextureID
+                   : 0u;
+    }
     uint32_t GetDepthAttachment() const { return m_DepthAttachment.TextureID; }
+    uint32_t GetFramebufferID() const { return m_RendererID; }
 
     uint32_t GetWidth()  const { return m_Width; }
     uint32_t GetHeight() const { return m_Height; }
