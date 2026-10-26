@@ -17,11 +17,11 @@ public:
     Texture(Texture&& other) noexcept;
     Texture& operator=(Texture&& other) noexcept;
 
-    // Loads via stb_image. srgb=true for color textures (albedo), false for data (normal).
-    // Returns nullptr on failure.
+    
+    
     static std::unique_ptr<Texture> LoadFromFile(const std::string& path, bool srgb);
 
-    // 1x1 solid-color texture (used for fallbacks).
+    
     static std::unique_ptr<Texture> CreateSolid(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255);
 
     void Bind(uint32_t slot = 0) const;
