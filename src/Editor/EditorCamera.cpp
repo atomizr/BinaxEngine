@@ -62,7 +62,10 @@ void EditorCamera::Update(float deltaTime)
     }
     m_WasRightPressed = pressed;
 
-    if (pressed)
+    
+    
+    
+    if (m_IsRotating)
     {
         glm::vec3 forward = m_Orientation * glm::vec3(0.0f, 0.0f, -1.0f);
         glm::vec3 right   = m_Orientation * glm::vec3(1.0f, 0.0f, 0.0f);
