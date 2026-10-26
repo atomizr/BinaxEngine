@@ -52,6 +52,12 @@ public:
     MaterialHandle Copy(const std::string& newName, MaterialHandle src);
     void Update(MaterialHandle h, const MaterialGPU& mat);
 
+    
+    
+    
+    
+    MaterialHandle GetOrCreateDefault();
+
     void SetAlbedoMap(MaterialHandle h, const std::string& path);
     void SetNormalMap(MaterialHandle h, const std::string& path);
     void SetMetallicMap(MaterialHandle h, const std::string& path);
@@ -59,17 +65,22 @@ public:
     void SetAOMap(MaterialHandle h, const std::string& path);
     void SetEmissiveMap(MaterialHandle h, const std::string& path);
 
-    const MaterialGPU&      Get(MaterialHandle h) const      { return m_CPU[h]; }
+    
+    
+    
+    
+    bool IsValid(MaterialHandle h) const { return h < m_CPU.size(); }
 
-    // [FIX] Раньше GetMutable() всегда выставлял m_Dirty=true, из-за чего
-    //       при открытом Material Editor'е Flush() пересоздавал SSBO
-    //       каждый кадр, даже если ничего не менялось. UI и так вызывает
-    //       MarkDirty() явно после каждого изменяющего виджета.
+    const MaterialGPU&      Get(MaterialHandle h) const      { return m_CPU[h]; }
     MaterialGPU&            GetMutable(MaterialHandle h)     { return m_CPU[h]; }
 
     const MaterialEditData& GetEdit(MaterialHandle h) const  { return m_Edit[h]; }
     const std::string&      GetName(MaterialHandle h) const  { return m_Edit[h].Name; }
     uint32_t                GetMaterialCount() const         { return (uint32_t)m_CPU.size(); }
+
+    
+    
+    const std::vector<MaterialEditData>& GetEditData() const { return m_Edit; }
 
     uint32_t GetMaterialSSBO() const { return m_SSBO; }
     void MarkDirty() { m_Dirty = true; }
@@ -87,4 +98,4 @@ private:
     bool m_Dirty = true;
 };
 
-} // namespace Binax
+} 
