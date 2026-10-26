@@ -1,8 +1,15 @@
 # Binax Engine
 
 <p align="center">
-  <b>A custom game engine and editor built with C++ / OpenGL 4.6</b><br>
+  <b>A custom game engine and editor built with C++20 / OpenGL 4.6</b><br>
   Deferred rendering · PBR · ECS · GPU-driven pipeline · Built-in scene editor
+</p>
+
+<p align="center">
+  <a href="https://github.com/atomizr/BinaxEngine/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Language" src="https://img.shields.io/badge/language-C%2B%2B20-orange.svg">
+  <img alt="OpenGL" src="https://img.shields.io/badge/OpenGL-4.6-5586a4.svg">
+  <img alt="Status" src="https://img.shields.io/badge/status-work%20in%20progress-yellow.svg">
 </p>
 
 ---
@@ -85,15 +92,15 @@ The project is actively evolving. Upcoming features include:
 - Cascaded Shadow Maps (CSM) for directional light.
 - Soft shadows (PCF / PCSS).
 
-### 🌫️ Particle System
-- GPU-driven particle system with emitters and modulators.
-- Support for various particle types (sprites, meshes).
-- Editor integration.
-
 ### 🌍 Image-Based Lighting (IBL)
 - Prefiltered environment maps (diffuse irradiance + specular prefilter).
 - BRDF LUT for PBR lighting.
 - Integration with the scene skybox.
+
+### 🌫️ Particle System
+- GPU-driven particle system with emitters and modulators.
+- Support for various particle types (sprites, meshes).
+- Editor integration.
 
 ### ⚙️ Physics — Jolt Physics
 - Integration of [Jolt Physics](https://github.com/jrouwe/JoltPhysics).
@@ -111,14 +118,14 @@ The project is actively evolving. Upcoming features include:
 - Automatic material creation from imported data.
 
 ### 🐍 Scripting — Lua
-- Embedding [Lua](https://www.lua.org/) (or [sol2](https://github.com/ThePhD/sol2)) as the scripting language.
+- Embedding [Lua](https://www.lua.org/) (via [sol2](https://github.com/ThePhD/sol2)) as the scripting language.
 - `ScriptComponent` with entity lifecycle hooks (`OnCreate`, `OnUpdate`, `OnDestroy`).
 - API for ECS, input, transforms, and audio access.
 
 ### Other
 - Editor improvements: undo/redo, asset browser, material graphs.
-- Optimization: Vulkan backend (future), cluster-based lighting.
-- Cross-platform builds (Windows/Linux).
+- Optimization: cluster-based lighting, potential Vulkan backend.
+- Cross-platform builds (Windows / Linux).
 
 ---
 
@@ -133,8 +140,8 @@ The project is actively evolving. Upcoming features include:
 
 ### Instructions
 ```bash
-git clone https://github.com/<your-username>/binax-engine.git
-cd binax-engine
+git clone https://github.com/atomizr/BinaxEngine.git
+cd BinaxEngine
 
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
@@ -147,7 +154,7 @@ cmake --build build --config Release
 ## 📂 Project Structure
 
 ```
-binax-engine/
+BinaxEngine/
 ├── src/
 │   ├── Core/            # Window, input, timer
 │   ├── ECS/             # Components and systems (EnTT)
@@ -194,13 +201,13 @@ binax-engine/
 
 ## 🤝 Contributing
 
-The project is at an early stage, but suggestions and pull requests are welcome. If you find a bug or want to discuss a feature, feel free to open an issue.
+The project is at an early stage, but suggestions and pull requests are welcome. If you find a bug or want to discuss a feature, feel free to open an [issue](https://github.com/atomizr/BinaxEngine/issues).
 
 ---
 
 ## 📄 License
 
-> _The license will be determined later. Until then, the project is distributed as-is for reference purposes only._
+This project is licensed under the **MIT License**. See the [LICENSE](https://github.com/atomizr/BinaxEngine/blob/main/LICENSE) file for details.
 
 ---
 
