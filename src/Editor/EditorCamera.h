@@ -6,17 +6,6 @@
 
 namespace Binax {
 
-
-
-
-
-
-
-
-
-
-
-
 class EditorCamera
 {
 public:
