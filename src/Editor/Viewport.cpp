@@ -13,8 +13,8 @@ Viewport::Viewport(uint32_t width, uint32_t height)
     glGenTextures(1, &m_TextureID);
     glBindTexture(GL_TEXTURE_2D, m_TextureID);
 
-    // В core profile 4.6 нужен sized internal format (GL_RGBA8).
-    // Unsized GL_RGB может быть отклонён / дать неполный FBO.
+    
+    
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
                  m_Width, m_Height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -34,6 +34,8 @@ Viewport::Viewport(uint32_t width, uint32_t height)
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         BINAX_LOG_ERROR("Viewport FBO incomplete!");
 
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -52,6 +54,13 @@ void Viewport::Resize(uint32_t width, uint32_t height)
     m_Width = width;
     m_Height = height;
 
+    
+    
+    GLint prevFBO = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    GLint prevTex = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+
     glBindFramebuffer(GL_FRAMEBUFFER, m_FBO);
     glBindTexture(GL_TEXTURE_2D, m_TextureID);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
@@ -59,7 +68,10 @@ void Viewport::Resize(uint32_t width, uint32_t height)
                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glBindRenderbuffer(GL_RENDERBUFFER, m_RBO);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, m_Width, m_Height);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTex));
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
 }
 
 void Viewport::Bind() const
@@ -73,4 +85,4 @@ void Viewport::Unbind() const
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-} // namespace Binax
+} 
