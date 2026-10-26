@@ -6,96 +6,66 @@
 #include <unordered_map>
 #include <vector>
 
-#include "Renderer/TextureHandle.h"
+#include "Renderer/Vertex.h"
 
 namespace Binax {
 
-using MaterialHandle = uint32_t;
-constexpr MaterialHandle kInvalidMaterial = 0xFFFFFFFFu;
+using MeshHandle = uint32_t;
+constexpr MeshHandle kInvalidMesh = 0xFFFFFFFFu;
 
-struct MaterialGPU
+struct MeshGPU
 {
-    glm::vec4 AlbedoRoughness;
-    glm::vec4 MetallicAOEms;
-    glm::vec4 SkyReflParams;
-    glm::vec4 StrengthA;
-
-    TextureHandle AlbedoHandle    = kInvalidTextureHandle;
-    TextureHandle NormalHandle    = kInvalidTextureHandle;
-    TextureHandle MetallicHandle  = kInvalidTextureHandle;
-    TextureHandle RoughnessHandle = kInvalidTextureHandle;
-    TextureHandle AOHandle        = kInvalidTextureHandle;
-    TextureHandle EmissiveHandle  = kInvalidTextureHandle;
-
-    glm::vec4 StrengthB;
+    uint32_t  BaseVertex  = 0;
+    uint32_t  VertexCount = 0;
+    uint32_t  BaseIndex   = 0;
+    uint32_t  IndexCount  = 0;
+    glm::vec3 AABBMin     = glm::vec3(0.0f);
+    float     _pad0       = 0.0f;
+    glm::vec3 AABBMax     = glm::vec3(0.0f);
+    float     _pad1       = 0.0f;
 };
-static_assert(sizeof(MaterialGPU) == 128, "MaterialGPU must be 128 bytes");
+static_assert(sizeof(MeshGPU) == 48, "MeshGPU layout");
 
-struct MaterialEditData
-{
-    std::string Name;
-    std::string AlbedoMapPath;
-    std::string NormalMapPath;
-    std::string MetallicMapPath;
-    std::string RoughnessMapPath;
-    std::string AOMapPath;
-    std::string EmissiveMapPath;
-};
-
-class MaterialLibrary
+class MeshLibrary
 {
 public:
-    static MaterialLibrary& Get();
+    static MeshLibrary& Get();
 
-    MaterialHandle Add(const std::string& name, const MaterialGPU& mat);
-    MaterialHandle Find(const std::string& name) const;
-    MaterialHandle Copy(const std::string& newName, MaterialHandle src);
-    void Update(MaterialHandle h, const MaterialGPU& mat);
-
-    
-    
-    
-    
-    MaterialHandle GetOrCreateDefault();
-
-    void SetAlbedoMap(MaterialHandle h, const std::string& path);
-    void SetNormalMap(MaterialHandle h, const std::string& path);
-    void SetMetallicMap(MaterialHandle h, const std::string& path);
-    void SetRoughnessMap(MaterialHandle h, const std::string& path);
-    void SetAOMap(MaterialHandle h, const std::string& path);
-    void SetEmissiveMap(MaterialHandle h, const std::string& path);
+    MeshHandle Add(const std::string& name,
+                   const std::vector<Vertex>& vertices,
+                   const std::vector<uint32_t>& indices);
+    MeshHandle Find(const std::string& name) const;
 
     
     
-    
-    
-    bool IsValid(MaterialHandle h) const { return h < m_CPU.size(); }
+    bool IsValid(MeshHandle h) const { return h < m_Meshes.size(); }
 
-    const MaterialGPU&      Get(MaterialHandle h) const      { return m_CPU[h]; }
-    MaterialGPU&            GetMutable(MaterialHandle h)     { return m_CPU[h]; }
+    const MeshGPU&     Get(MeshHandle h) const     { return m_Meshes[h]; }
+    const std::string& GetName(MeshHandle h) const { return m_Names[h]; }
+    uint32_t           GetMeshCount() const        { return (uint32_t)m_Meshes.size(); }
 
-    const MaterialEditData& GetEdit(MaterialHandle h) const  { return m_Edit[h]; }
-    const std::string&      GetName(MaterialHandle h) const  { return m_Edit[h].Name; }
-    uint32_t                GetMaterialCount() const         { return (uint32_t)m_CPU.size(); }
-
-    
-    
-    const std::vector<MaterialEditData>& GetEditData() const { return m_Edit; }
-
-    uint32_t GetMaterialSSBO() const { return m_SSBO; }
-    void MarkDirty() { m_Dirty = true; }
+    void BindVAO() const;
     void Flush();
     void Clear();
 
+    
+    uint32_t GetMeshSSBO() const { return m_MeshSSBO; }
+
 private:
-    MaterialLibrary() = default;
+    MeshLibrary() = default;
 
-    std::vector<MaterialGPU>      m_CPU;
-    std::vector<MaterialEditData> m_Edit;
-    std::unordered_map<std::string, MaterialHandle> m_ByName;
+    std::vector<Vertex>         m_CPUVertices;
+    std::vector<uint32_t>       m_CPUIndices;
+    std::vector<MeshGPU>        m_Meshes;
+    std::vector<std::string>    m_Names;
+    std::unordered_map<std::string, MeshHandle> m_ByName;
 
-    uint32_t m_SSBO = 0;
-    bool m_Dirty = true;
+    uint32_t m_VAO = 0;
+    uint32_t m_VBO = 0;
+    uint32_t m_IBO = 0;
+    uint32_t m_MeshSSBO = 0;
+    bool     m_Dirty = false;
+    bool     m_VAOReady = false;
 };
 
 } 
