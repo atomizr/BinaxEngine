@@ -1,5 +1,6 @@
 
 #include "Reflect/ComponentRegistry.h"
+#include "Utils/Log.h"
 
 namespace Binax::Reflect {
 
@@ -7,6 +8,11 @@ ComponentRegistry& ComponentRegistry::Get()
 {
     static ComponentRegistry instance;
     return instance;
+}
+
+void ComponentRegistry::WarnDuplicate(const std::string& name) const
+{
+    BINAX_LOG_WARN("Component '{}' already registered - ignoring", name);
 }
 
 const ComponentRegistry::Entry* ComponentRegistry::Find(std::string_view name) const
