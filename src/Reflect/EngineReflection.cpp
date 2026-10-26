@@ -9,6 +9,7 @@
 #include "ECS/Components/NameComponent.h"
 #include "ECS/Components/EditorCameraComponent.h"
 #include "ECS/Components/SkyboxComponent.h"
+#include "ECS/Components/PostProcessComponent.h"
 
 using namespace Binax;
 
@@ -33,7 +34,7 @@ BINAX_REFLECT(Binax::CameraComponent)
         .SetSpeed(0.01f).SetReadOnly().SetTransient();
     info.Add(&CameraComponent::Primary,     "Primary",     PropertyKind::Bool);
 
-    // ---- Post-processing ----
+    
     info.Add(&CameraComponent::FXAAEnabled,          "FXAA",                    PropertyKind::Bool);
     info.Add(&CameraComponent::FXAAEdgeThreshold,    "FXAA Edge Threshold",     PropertyKind::Float)
         .SetRange(0.0f, 0.5f).SetSpeed(0.001f);
@@ -41,6 +42,11 @@ BINAX_REFLECT(Binax::CameraComponent)
         .SetRange(0.0f, 0.2f).SetSpeed(0.001f);
     info.Add(&CameraComponent::FXAASubpixelBlending, "FXAA Subpixel Blending",  PropertyKind::Float)
         .SetRange(0.0f, 1.0f);
+
+    
+    info.Add(&CameraComponent::TAAEnabled,       "TAA",                  PropertyKind::Bool);
+    info.Add(&CameraComponent::TAAHistoryWeight, "TAA History Weight",   PropertyKind::Float)
+        .SetRange(0.0f, 0.98f).SetSpeed(0.01f);
 }
 
 BINAX_REFLECT(Binax::EditorCameraComponent)
@@ -66,8 +72,8 @@ BINAX_REFLECT(Binax::LightComponent)
 
 BINAX_REFLECT(Binax::MeshComponent)
 {
-    // MeshId сериализуется, но транзиентно — реальное значение
-    // восстанавливается через MeshName в SceneSerializer.
+    
+    
     info.Add(&MeshComponent::MeshId, "Mesh Id", PropertyKind::UInt)
         .SetReadOnly().SetTransient();
 }
@@ -96,6 +102,80 @@ BINAX_REFLECT(Binax::NameComponent)
     info.Add(&NameComponent::Name, "Name", PropertyKind::String);
 }
 
+BINAX_REFLECT(Binax::PostProcessComponent)
+{
+    info.Add(&PostProcessComponent::Enabled,  "Enabled",  PropertyKind::Bool);
+    info.Add(&PostProcessComponent::Exposure, "Exposure", PropertyKind::Float)
+        .SetRange(0.1f, 4.0f).SetSpeed(0.01f);
+    info.Add(&PostProcessComponent::Tonemap, "Tonemap", PropertyKind::Enum).SetEnums({
+        { static_cast<int>(TonemapMode::ACES),     "ACES"    },
+        { static_cast<int>(TonemapMode::Reinhard), "Reinhard" },
+        { static_cast<int>(TonemapMode::Filmic),   "Filmic"   },
+        { static_cast<int>(TonemapMode::AgX),      "AgX"      },
+        { static_cast<int>(TonemapMode::Linear),   "Linear"   }
+    });
+
+    
+    info.Add(&PostProcessComponent::Contrast,    "Contrast",    PropertyKind::Float).SetRange(0.0f, 2.0f).SetSpeed(0.01f);
+    info.Add(&PostProcessComponent::Saturation,  "Saturation",  PropertyKind::Float).SetRange(0.0f, 2.0f).SetSpeed(0.01f);
+    info.Add(&PostProcessComponent::Temperature, "Temperature", PropertyKind::Float).SetRange(-1.0f, 1.0f).SetSpeed(0.01f);
+    info.Add(&PostProcessComponent::Tint,        "Tint",        PropertyKind::Float).SetRange(-1.0f, 1.0f).SetSpeed(0.01f);
+    info.Add(&PostProcessComponent::Lift,  "Lift",  PropertyKind::Color3);
+    info.Add(&PostProcessComponent::Gamma, "Gamma", PropertyKind::Color3);
+    info.Add(&PostProcessComponent::Gain,  "Gain",  PropertyKind::Color3);
+
+    
+    info.Add(&PostProcessComponent::BloomEnabled,   "Bloom",           PropertyKind::Bool);
+    info.Add(&PostProcessComponent::BloomThreshold, "Bloom Threshold", PropertyKind::Float)
+        .SetRange(0.0f, 10.0f).SetSpeed(0.01f);
+    info.Add(&PostProcessComponent::BloomIntensity, "Bloom Intensity", PropertyKind::Float)
+        .SetRange(0.0f, 2.0f).SetSpeed(0.005f);
+
+    
+    info.Add(&PostProcessComponent::MotionBlurEnabled,  "Motion Blur",         PropertyKind::Bool);
+    info.Add(&PostProcessComponent::MotionBlurStrength, "Motion Blur Strength", PropertyKind::Float)
+        .SetRange(0.0f, 2.0f).SetSpeed(0.01f);
+    info.Add(&PostProcessComponent::MotionBlurSamples,  "Motion Blur Samples",  PropertyKind::Int)
+        .SetRange(2.0f, 16.0f);
+
+    
+    info.Add(&PostProcessComponent::LensDistortionEnabled, "Lens Distortion",    PropertyKind::Bool);
+    info.Add(&PostProcessComponent::LensDistortion,        "Distortion Amount",  PropertyKind::Float)
+        .SetRange(-0.5f, 0.5f).SetSpeed(0.001f);
+
+    
+    info.Add(&PostProcessComponent::ChromaticAberrationEnabled, "Chromatic Aberration", PropertyKind::Bool);
+    info.Add(&PostProcessComponent::ChromaticAberration,        "CA Amount",            PropertyKind::Float)
+        .SetRange(0.0f, 1.0f).SetSpeed(0.005f);
+
+    
+    info.Add(&PostProcessComponent::VignetteEnabled,    "Vignette",            PropertyKind::Bool);
+    info.Add(&PostProcessComponent::VignetteIntensity,  "Vignette Intensity",  PropertyKind::Float)
+        .SetRange(0.0f, 1.0f).SetSpeed(0.005f);
+    info.Add(&PostProcessComponent::VignetteSmoothness, "Vignette Smoothness", PropertyKind::Float)
+        .SetRange(0.0f, 1.0f).SetSpeed(0.005f);
+
+    
+    info.Add(&PostProcessComponent::FilmGrainEnabled,   "Film Grain",           PropertyKind::Bool);
+    info.Add(&PostProcessComponent::FilmGrainIntensity, "Film Grain Intensity", PropertyKind::Float)
+        .SetRange(0.0f, 0.5f).SetSpeed(0.001f);
+
+    
+    info.Add(&PostProcessComponent::FogEnabled, "Fog", PropertyKind::Bool);
+    info.Add(&PostProcessComponent::Fog, "Fog Mode", PropertyKind::Enum).SetEnums({
+        { static_cast<int>(FogMode::Linear),             "Linear"             },
+        { static_cast<int>(FogMode::Exponential),        "Exponential"        },
+        { static_cast<int>(FogMode::ExponentialSquared), "Exponential Squared" }
+    });
+    info.Add(&PostProcessComponent::FogColor,   "Fog Color",   PropertyKind::Color3);
+    info.Add(&PostProcessComponent::FogDensity, "Fog Density", PropertyKind::Float)
+        .SetRange(0.0f, 0.5f).SetSpeed(0.001f);
+    info.Add(&PostProcessComponent::FogStart,   "Fog Start",   PropertyKind::Float)
+        .SetRange(0.0f, 500.0f).SetSpeed(0.1f);
+    info.Add(&PostProcessComponent::FogEnd,     "Fog End",     PropertyKind::Float)
+        .SetRange(0.0f, 2000.0f).SetSpeed(0.5f);
+}
+
 namespace Binax::Reflect {
 
 void RegisterEngineComponents()
@@ -113,6 +193,7 @@ void RegisterEngineComponents()
     cr.Register<NameComponent>         ("Name",                  true,  false);
     cr.Register<EditorCameraComponent> ("EditorCameraComponent", true,  true);
     cr.Register<SkyboxComponent>       ("Skybox");
+    cr.Register<PostProcessComponent>  ("Post Processing");
 }
 
 }
