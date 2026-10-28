@@ -109,13 +109,15 @@ target_link_libraries(${PROJECT_NAME}
     ${OPENGL_LIBRARIES}
 )
 
-if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/resources)
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_CURRENT_SOURCE_DIR}/resources
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>/resources
-        COMMENT "Copying runtime resources to output directory"
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders
+        COMMENT "Copying shaders to output directory"
     )
+else()
+    message(WARNING "shaders/ not found next to CMakeLists.txt — runtime will fail to load GLSL")
 endif()
 
 if(MSVC)
