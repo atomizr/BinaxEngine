@@ -36,6 +36,8 @@ public:
                    const std::vector<uint32_t>& indices);
     MeshHandle Find(const std::string& name) const;
 
+    bool IsValid(MeshHandle h) const { return h < m_Meshes.size(); }
+
     const MeshGPU&     Get(MeshHandle h) const     { return m_Meshes[h]; }
     const std::string& GetName(MeshHandle h) const { return m_Names[h]; }
     uint32_t           GetMeshCount() const        { return (uint32_t)m_Meshes.size(); }
@@ -43,6 +45,8 @@ public:
     void BindVAO() const;
     void Flush();
     void Clear();
+
+    uint32_t GetMeshSSBO() const { return m_MeshSSBO; }
 
 private:
     MeshLibrary() = default;
