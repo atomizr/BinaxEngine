@@ -6,66 +6,91 @@
 #include <unordered_map>
 #include <vector>
 
-#include "Renderer/Vertex.h"
+#include "Renderer/TextureHandle.h"
 
 namespace Binax {
 
-using MeshHandle = uint32_t;
-constexpr MeshHandle kInvalidMesh = 0xFFFFFFFFu;
+using MaterialHandle = uint32_t;
+constexpr MaterialHandle kInvalidMaterial = 0xFFFFFFFFu;
 
-struct MeshGPU
+// Раскладка должна точно совпадать с struct MaterialGPU в geometry.frag (std430):
+//   vec4 AlbedoRoughness;  vec4 MetallicAOEms;  vec4 SkyReflParams;  vec4 StrengthA;
+//   uvec2 AlbedoHandle;    uvec2 NormalHandle;  uvec2 MetallicHandle;
+//   uvec2 RoughnessHandle; uvec2 AOHandle;      uvec2 EmissiveHandle; vec4 StrengthB;
+struct MaterialGPU
 {
-    uint32_t  BaseVertex  = 0;
-    uint32_t  VertexCount = 0;
-    uint32_t  BaseIndex   = 0;
-    uint32_t  IndexCount  = 0;
-    glm::vec3 AABBMin     = glm::vec3(0.0f);
-    float     _pad0       = 0.0f;
-    glm::vec3 AABBMax     = glm::vec3(0.0f);
-    float     _pad1       = 0.0f;
-};
-static_assert(sizeof(MeshGPU) == 48, "MeshGPU layout");
+    glm::vec4     AlbedoRoughness{ 0.8f, 0.8f, 0.8f, 0.5f };
+    glm::vec4     MetallicAOEms  { 0.0f, 1.0f, 0.0f, 1.0f };
+    glm::vec4     SkyReflParams  { 1.0f, 1.0f, 0.0f, 0.0f };
+    glm::vec4     StrengthA      { 1.0f };
 
-class MeshLibrary
+    TextureHandle AlbedoHandle    = kInvalidTextureHandle;
+    TextureHandle NormalHandle    = kInvalidTextureHandle;
+    TextureHandle MetallicHandle  = kInvalidTextureHandle;
+    TextureHandle RoughnessHandle = kInvalidTextureHandle;
+    TextureHandle AOHandle        = kInvalidTextureHandle;
+    TextureHandle EmissiveHandle  = kInvalidTextureHandle;
+
+    glm::vec4     StrengthB      { 1.0f };
+};
+static_assert(sizeof(MaterialGPU) == 128,
+              "MaterialGPU must be 128 bytes to match std430 layout in geometry.frag");
+
+struct MaterialEditData
+{
+    std::string Name;
+    std::string AlbedoMapPath;
+    std::string NormalMapPath;
+    std::string MetallicMapPath;
+    std::string RoughnessMapPath;
+    std::string AOMapPath;
+    std::string EmissiveMapPath;
+};
+
+class MaterialLibrary
 {
 public:
-    static MeshLibrary& Get();
+    static MaterialLibrary& Get();
 
-    MeshHandle Add(const std::string& name,
-                   const std::vector<Vertex>& vertices,
-                   const std::vector<uint32_t>& indices);
-    MeshHandle Find(const std::string& name) const;
+    MaterialHandle Add(const std::string& name, const MaterialGPU& mat);
+    MaterialHandle GetOrCreateDefault();
+    MaterialHandle Copy(const std::string& newName, MaterialHandle src);
+    MaterialHandle Find(const std::string& name) const;
 
-    
-    
-    bool IsValid(MeshHandle h) const { return h < m_Meshes.size(); }
+    bool IsValid(MaterialHandle h) const { return h < m_CPU.size(); }
 
-    const MeshGPU&     Get(MeshHandle h) const     { return m_Meshes[h]; }
-    const std::string& GetName(MeshHandle h) const { return m_Names[h]; }
-    uint32_t           GetMeshCount() const        { return (uint32_t)m_Meshes.size(); }
+    const MaterialGPU& Get(MaterialHandle h)        const { return m_CPU[h]; }
+    MaterialGPU&       GetMutable(MaterialHandle h)       { return m_CPU[h]; }
 
-    void BindVAO() const;
+    const MaterialEditData& GetEdit(MaterialHandle h) const { return m_Edit[h]; }
+    const std::vector<MaterialEditData>& GetEditData() const { return m_Edit; }
+    const std::string& GetName(MaterialHandle h) const { return m_Edit[h].Name; }
+    uint32_t GetMaterialCount() const { return (uint32_t)m_CPU.size(); }
+
+    void Update(MaterialHandle h, const MaterialGPU& mat);
+
+    void SetAlbedoMap   (MaterialHandle h, const std::string& path);
+    void SetNormalMap   (MaterialHandle h, const std::string& path);
+    void SetMetallicMap (MaterialHandle h, const std::string& path);
+    void SetRoughnessMap(MaterialHandle h, const std::string& path);
+    void SetAOMap       (MaterialHandle h, const std::string& path);
+    void SetEmissiveMap (MaterialHandle h, const std::string& path);
+
     void Flush();
     void Clear();
+    void MarkDirty() { m_Dirty = true; }
 
-    
-    uint32_t GetMeshSSBO() const { return m_MeshSSBO; }
+    uint32_t GetMaterialSSBO() const { return m_SSBO; }
 
 private:
-    MeshLibrary() = default;
+    MaterialLibrary() = default;
 
-    std::vector<Vertex>         m_CPUVertices;
-    std::vector<uint32_t>       m_CPUIndices;
-    std::vector<MeshGPU>        m_Meshes;
-    std::vector<std::string>    m_Names;
-    std::unordered_map<std::string, MeshHandle> m_ByName;
+    std::vector<MaterialGPU>      m_CPU;
+    std::vector<MaterialEditData> m_Edit;
+    std::unordered_map<std::string, MaterialHandle> m_ByName;
 
-    uint32_t m_VAO = 0;
-    uint32_t m_VBO = 0;
-    uint32_t m_IBO = 0;
-    uint32_t m_MeshSSBO = 0;
-    bool     m_Dirty = false;
-    bool     m_VAOReady = false;
+    uint32_t m_SSBO  = 0;
+    bool     m_Dirty = true;
 };
 
-} 
+} // namespace Binax
