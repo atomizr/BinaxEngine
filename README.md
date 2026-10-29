@@ -31,16 +31,16 @@ The engine includes a full-featured editor with a scene hierarchy, component ins
 - **PBR lighting** with support for up to **32 light sources**: directional, point, and spot lights.
 - **Bindless textures** (`GL_ARB_bindless_texture`) for efficient material handling.
 - **GPU-driven rendering**:
-  - Compute-shader frustum culling.
+  - Compute-shader frustum culling **at the instance-group level** (one workgroup per draw-group, one indirect draw per surviving group).
   - Indirect draws (`glMultiDrawElementsIndirectCount`).
-  - Instancing with SSBOs for instances, materials, and meshes.
+  - Instancing with SSBOs for instances, materials, meshes, and per-group draw templates.
 - **Skybox** based on a cubemap with rotation and adjustable brightness.
 - **Post-processing**:
   - Tonemapping: ACES, Reinhard, Filmic, AgX, Linear.
-  - TAA (Temporal Anti-Aliasing) with projection jitter and frame history.
+  - TAA (Temporal Anti-Aliasing) with projection jitter, Halton sequence, and neighborhood clipping in YCoCg space.
   - FXAA (as an alternative to TAA).
   - Bloom (multi-mip down/up-sampling).
-  - Motion Blur based on the velocity buffer.
+  - Motion Blur based on the velocity buffer, with depth-rejection.
   - Vignette, film grain, chromatic aberration, lens distortion.
   - Fog: linear, exponential, exponential squared.
   - Color grading: exposure, contrast, saturation, temperature, tint, lift/gamma/gain.
@@ -59,7 +59,7 @@ The engine includes a full-featured editor with a scene hierarchy, component ins
 - **Inspector** powered by reflection — automatic widgets for all registered components.
 - **Viewport with gizmos** ([ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo)): translate, rotate, scale with grid snapping.
 - **Material editor** — edit PBR parameters and assign textures via the built-in file browser.
-- **Stats panel** — FPS, frame time, draw calls, vertices, triangles, instances, GPU culling and post-processing state.
+- **Stats panel** — FPS, frame time, draw calls, vertices, triangles, instances, visible/culled instances, GPU culling and post-processing state.
 - **Hot shader reloading**.
 - One-click scene save/load.
 
@@ -80,6 +80,28 @@ The engine includes a full-featured editor with a scene hierarchy, component ins
 | Image Loading | [stb_image](https://github.com/nothings/stb) |
 | JSON | [nlohmann/json](https://github.com/nlohmann/json) |
 | Build System | CMake |
+
+---
+
+## 🐛 Recent Fixes
+
+The following issues were found during a code review pass and fixed. They are noted here for anyone tracking the project history.
+
+### Graphics pipeline
+- **TAA reprojection (Y-flip mismatch with Motion Blur).** `taa.frag` reprojected history with `vec2(vel.x, -vel.y)`, while `motion_blur.frag` (and the velocity buffer written by `geometry.vert`) used `vel` directly. This produced vertically mirrored reprojection → visible ghosting/trailing. Reprojection now uses `vel` as-is, matching the velocity convention.
+- **GPU frustum culling: draw-per-instance regression.** The compute shader wrote one indirect draw per *visible instance* (ordering non-deterministic via `atomicAdd`), so the number of draw calls grew with instance count — a performance regression vs. the CPU path which groups instances by mesh. The culling pass was rewritten to work **per instance-group**: each workgroup processes one draw-group, if any instance survives, one indirect draw is emitted with the group's `InstanceCount` and `BaseInstance`. Instance-group templates are uploaded to a new SSBO (binding 8). `BaseInstance`/`InstanceCount` are preserved, so `geometry.vert` still reads `gl_BaseInstance + gl_InstanceID` unchanged.
+- **GPU culling: `atomicAdd` before bounds check.** The draw counter was incremented even for slots rejected by `slot >= u_MaxDraws`. Although in practice `u_MaxDraws == groupCount` prevented overflow, the counter could desync from the actual number of valid commands. The counter is now incremented only after the bounds check passes.
+- **`DrawState` SSBO extended to 4 uints** to carry `visibleInstanceCount` — Stats panel now shows the correct "Visible / Culled" instance counts instead of deriving them from draw-call count.
+- **Post-process `Enabled` toggle didn't disable tonemapping.** With `PostProcessComponent::Enabled == false`, the renderer still ran `ApplyTonemap` with `TonemapMode = 0 (ACES)` — so ACES and exposure were always applied even with the checkbox off. `GatherPostProcessSettings` now returns `TonemapMode::Linear` by default (plain clamp), so disabling post-processing actually produces a passthrough image.
+- **FXAA mutated the LDR FBO's texture filter.** `ApplyFXAA` called `glTexParameteri(..., GL_LINEAR)` on the LDR color attachment every frame — a global side effect on the FBO (originally created with `GL_NEAREST`). The filter is now set once in `EnsurePostTargets` after (re)creation, and `ApplyFXAA` no longer touches the parameters.
+- **TAA / Motion Blur: stale `m_PrevJitter` after resize.** `DeferredRenderer::Resize` reset TAA history and `m_HasPrevViewProj` but not `m_PrevJitter`. The first frame after a resize could compute a bogus `u_JitterDelta = m_PrevJitter - m_Jitter`. `m_PrevJitter` is now reset to zero on resize.
+
+### Editor
+- **Font loading: latent double-free.** `ImFontAtlas::AddFontFromMemoryTTF` always takes ownership of the memory buffer, even when font parsing fails. The `else` branch in `LoadEditorFont` called `std::free(buf)` on the (now owned) buffer — a double-free waiting to happen. The branch no longer frees the buffer.
+
+### Minor
+- **`DrawState` initialisation** updated to 4 × `uint32_t` to match the new `visibleInstanceCount` field.
+- **Stats panel** now correctly distinguishes *draw calls* (one per surviving group) from *visible instances*.
 
 ---
 
@@ -122,9 +144,15 @@ The project is actively evolving. Upcoming features include:
 - `ScriptComponent` with entity lifecycle hooks (`OnCreate`, `OnUpdate`, `OnDestroy`).
 - API for ECS, input, transforms, and audio access.
 
+### Rendering pipeline (upcoming)
+- **Per-instance GPU culling via stream compaction** — the current culling pass operates at the instance-group level (a whole group is drawn if any instance survives). A prefix-sum + stream-compaction pass in the compute shader will allow per-instance rejection while preserving one draw call per mesh, moving towards a fully GPU-driven MDI pipeline.
+- Shadows, CSM, PCF/PCSS.
+- IBL (prefiltered env + BRDF LUT).
+- Clustered forward lighting (or Light BVH) for `> 32` lights.
+- Potential Vulkan backend.
+
 ### Other
 - Editor improvements: undo/redo, asset browser, material graphs.
-- Optimization: cluster-based lighting, potential Vulkan backend.
 - Cross-platform builds (Windows / Linux).
 
 ---
