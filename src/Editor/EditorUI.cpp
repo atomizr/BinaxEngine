@@ -1631,16 +1631,8 @@ void EditorUI::ApplyQtGrayStyle()
 
 void EditorUI::LoadEditorFont()
 {
-    
-    
     const std::string fontPath = Paths::Resolve("resources/fonts/EditorFont.ttf");
 
-    
-    
-    
-    
-    
-    
     std::FILE* file = OpenFileUtf8(fontPath);
     if (!file)
     {
@@ -1686,8 +1678,9 @@ void EditorUI::LoadEditorFont()
     }
     else
     {
-        
-        std::free(buf);
+        // FIX: НЕ вызываем std::free(buf). ImFontAtlas::AddFontFromMemoryTTF
+        // забирает владение буфером ВСЕГДА, включая случай ошибки парсинга —
+        // иначе double-free.
         BINAX_LOG_WARN("[Editor] Failed to parse font '{}'", fontPath);
     }
 }
