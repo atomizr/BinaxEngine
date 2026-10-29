@@ -82,14 +82,12 @@ void EnsureSkyboxExists(entt::registry& registry)
         CreateSkyboxEntity(registry);
 }
 
-
 entt::entity CreatePostProcessCfgEntity(entt::registry& registry)
 {
     auto e = registry.create();
     registry.emplace<Binax::NameComponent>(e, "PostProcessingCfg");
     registry.emplace<Binax::Transform>(e);
     registry.emplace<Binax::PostProcessComponent>(e);
-    
     registry.emplace<Binax::SystemEntityTag>(e);
     return e;
 }
@@ -101,18 +99,21 @@ void EnsurePostProcessCfgExists(entt::registry& registry)
         CreatePostProcessCfgEntity(registry);
 }
 
-
-
 Binax::PostProcessSettings GatherPostProcessSettings(entt::registry& registry)
 {
     Binax::PostProcessSettings s;
+
+    // FIX: дефолтный tonemap — Linear (просто clamp), а не ACES.
+    // Раньше при post.Enabled == false ACES всё равно применялся, потому что
+    // ApplyTonemap вызывается всегда, а TonemapMode по умолчанию был 0 (ACES).
+    s.TonemapMode = static_cast<int>(Binax::TonemapMode::Linear);
 
     auto view = registry.view<Binax::PostProcessComponent>();
     for (auto e : view)
     {
         const auto& c = view.get<Binax::PostProcessComponent>(e);
         if (!c.Enabled)
-            return s;
+            return s;   // Linear tonemap + дефолтные громкости → passthrough-ish
 
         s.Enabled  = true;
         s.Exposure = c.Exposure;
@@ -182,7 +183,7 @@ Binax::SkyboxParams GatherSkyboxParams(entt::registry& registry)
             if (p.empty()) { complete = false; break; }
         if (!complete) return params;
 
-        params.CubemapPtr      = Binax::AssetRegistry::Get().GetCubemap(faces,  true);
+        params.CubemapPtr      = Binax::AssetRegistry::Get().GetCubemap(faces, true);
         params.RotationRadians = glm::radians(sc.Rotation);
         params.Brightness      = sc.Brightness;
         return params;
@@ -191,7 +192,6 @@ Binax::SkyboxParams GatherSkyboxParams(entt::registry& registry)
 }
 
 } 
-
 
 int main()
 {
@@ -221,7 +221,6 @@ int main()
         BINAX_LOG_INFO("OpenGL: {0}",
             reinterpret_cast<const char*>(glGetString(GL_VERSION)));
 
-        
         if (!GLAD_GL_ARB_bindless_texture)
         {
             BINAX_LOG_ERROR("GL_ARB_bindless_texture required but not available");
@@ -236,10 +235,6 @@ int main()
         }
         BINAX_LOG_INFO("ARB_shader_draw_parameters: available");
 
-        
-        
-        
-        
         {
             GLint major = 0, minor = 0;
             glGetIntegerv(GL_MAJOR_VERSION, &major);
@@ -251,7 +246,6 @@ int main()
         Binax::Timer timer;
         Binax::DeferredRenderer renderer(props.Width, props.Height);
 
-        
         {
             auto cube = Binax::Mesh::CreateCube();
             Binax::MeshLibrary::Get().Add("Cube", cube.Vertices, cube.Indices);
@@ -263,11 +257,6 @@ int main()
             BINAX_LOG_INFO("Built-in meshes registered");
         }
 
-        
-        
-        
-        
-        
         Binax::MaterialSerializer::LoadAll(
             Binax::MaterialLibrary::Get(),
             Binax::Paths::Resolve(Binax::AssetFiles::kMaterialsDir));
@@ -284,7 +273,6 @@ int main()
         BINAX_LOG_INFO("PostProcessingCfg entity ensured");
 
         {
-            
             const std::string ppPath =
                 Binax::Paths::Resolve(Binax::AssetFiles::kPostProcessFile);
 
@@ -323,8 +311,6 @@ int main()
         }
 
         EnsureSkyboxExists(registry);
-
-        
         EnsurePostProcessCfgExists(registry);
 
         Binax::Viewport viewport(props.Width, props.Height);
@@ -332,7 +318,6 @@ int main()
         Binax::EditorUI editorUI(window.GetGLFWWindow(), registry);
         editorUI.SetViewport(&viewport);
 
-        
         bool vsyncEnabled = props.VSync;
         float smoothedFps = 0.0f;
 
@@ -401,9 +386,6 @@ int main()
             Binax::Input::Update();
             window.Update();
 
-            
-            
-            
             editorUI.SyncViewportSize();
 
             const float vpAspect = viewport.GetAspect();
@@ -421,17 +403,10 @@ int main()
                 }
             }
 
-            
-            
-            
             if (Binax::Input::IsKeyPressed(GLFW_KEY_ESCAPE) &&
                 !ImGui::GetIO().WantTextInput)
                 window.SetShouldClose(true);
 
-            
-            
-            
-            
             auto cameraView = registry.view<Binax::Transform,
                                             Binax::EditorCameraComponent,
                                             Binax::CameraComponent>();
@@ -490,11 +465,9 @@ int main()
             editorUI.SetCameraMatrices(editorCamera.GetViewMatrix(),
                                        editorCamera.GetProjectionMatrix());
 
-            
             renderer.SetTAAEnabled(frameTAA.Enabled);
             renderer.ClearGBuffer();
 
-            
             Binax::TransformSystem::UpdateWorldTransforms(registry);
 
             Binax::RenderSystem::BuildFrameData(registry, frameData);
@@ -508,13 +481,9 @@ int main()
 
             Binax::SkyboxParams skyboxParams = GatherSkyboxParams(registry);
 
-            
             const Binax::PostProcessSettings postSettings =
                 GatherPostProcessSettings(registry);
 
-            
-            
-            
             renderer.LightingPass(collectedLights,
                                   editorCamera.GetPosition(),
                                   editorCamera.GetViewMatrix(),
@@ -528,7 +497,6 @@ int main()
                                   postSettings,
                                   timer.GetElapsed());
 
-            
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glViewport(0, 0, window.GetWidth(), window.GetHeight());
             glClear(GL_COLOR_BUFFER_BIT);
