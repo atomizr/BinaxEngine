@@ -1,23 +1,11 @@
 #version 460 core
 
-// ---------------------------------------------------------------------------
-// GPU frustum culling.
-//
-// Для каждого инстанса берём локальный AABB меша, переводим его в мир
-// (центр — матрицей модели, экстенты — модулями базисных векторов) и
-// проверяем против шести плоскостей пирамиды видимости. Видимые инстансы
-// атомарно добавляют indirect-команду (по одной на инстанс) в буфер,
-// который затем скармливается glMultiDrawElementsIndirectCount.
-//
-// BaseInstance команды = индекс инстанса, InstanceCount = 1, поэтому
-// существующий geometry.vert (gl_BaseInstance + gl_InstanceID) продолжает
-// работать без изменений.
-//
-// Раскладки структур совпадают с C++:
-//   InstanceGPU  (Renderer/InstanceBuffer.h)  — 144 байта
-//   MeshGPU      (Renderer/MeshLibrary.h)     — 48 байт
-//   DrawElementsIndirect (Renderer/DrawCommand.h) — 20 байт
-// ---------------------------------------------------------------------------
+// FIX (критично): переработан с "один draw call на инстанс" на
+// "один workgroup на группу инстансов". Раньше при включённом GPU-culling
+// число draw call'ов росло с числом видимых инстансов — прямая регрессия
+// по сравнению с CPU-путём (RenderSystem::BuildFrameData), который
+// группирует инстансы по мешу. Теперь один draw на группу (если в ней
+// есть хотя бы один видимый инстанс), с сохранением MDI-контракта.
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -61,78 +49,98 @@ layout(std430, binding = 6) writeonly buffer DrawCommands {
     DrawElementsIndirect draws[];
 };
 
-// [0] = количество команд (читается драйвером как drawcount из
-//       GL_PARAMETER_BUFFER), [1] = вершины, [2] = индексы.
 layout(std430, binding = 7) buffer DrawState {
     uint drawCount;
     uint vertexCount;
     uint indexCount;
+    uint visibleInstanceCount;
 };
 
-uniform vec4 u_Frustum[6];   // xyz = нормаль, w = d
-uniform uint u_InstanceCount;
+// NEW: шаблоны draw-команд по группам (копия frame.Draws с CPU).
+// BaseInstance/InstanceCount каждой группы указывают в массив instances[].
+layout(std430, binding = 8) readonly buffer GroupTemplates {
+    DrawElementsIndirect groupTemplates[];
+};
+
+uniform vec4 u_Frustum[6];
+uniform uint u_GroupCount;
 uniform uint u_MaxDraws;
 
 const uint kInstanceFlagSkinned = 1u;
 
+shared uint s_anyVisible;
+
 void main()
 {
-    const uint instanceIndex = gl_GlobalInvocationID.x;
-    if (instanceIndex >= u_InstanceCount)
+    const uint groupIdx = gl_WorkGroupID.x;
+    if (groupIdx >= u_GroupCount)
         return;
 
-    const InstanceGPU inst = instances[instanceIndex];
-    const MeshGPU mesh = meshes[inst.MeshId];
+    const DrawElementsIndirect tpl = groupTemplates[groupIdx];
+    const uint base  = tpl.BaseInstance;
+    const uint count = tpl.InstanceCount;
 
-    // Скиннинг деформирует вершины в вершинном шейдере — AABB в bind-pose
-    // перестаёт быть консервативным, поэтому такие инстансы не режем.
-    bool visible = ((inst.Flags & kInstanceFlagSkinned) != 0u);
+    if (count == 0u)
+        return;
 
-    if (!visible)
+    const uint lane   = gl_LocalInvocationID.x;
+    const uint stride = gl_WorkGroupSize.x;
+
+    if (lane == 0u)
+        s_anyVisible = 0u;
+    barrier();
+
+    for (uint i = lane; i < count; i += stride)
     {
-        const vec3 localCenter = (mesh.AABBMin + mesh.AABBMax) * 0.5;
-        const vec3 localExtent = (mesh.AABBMax - mesh.AABBMin) * 0.5;
+        const uint instanceIndex = base + i;
+        const InstanceGPU inst = instances[instanceIndex];
+        const MeshGPU    mesh = meshes[inst.MeshId];
 
-        const vec3 worldCenter = (inst.Model * vec4(localCenter, 1.0)).xyz;
+        bool visible = ((inst.Flags & kInstanceFlagSkinned) != 0u);
 
-        // Экстенты трансформируются модулями базисных векторов: это даёт
-        // AABB, охватывающий повёрнутую коробку (консервативно).
-        const mat3 absBasis = mat3(abs(inst.Model[0].xyz),
-                                   abs(inst.Model[1].xyz),
-                                   abs(inst.Model[2].xyz));
-        const vec3 worldExtent = absBasis * localExtent;
-
-        visible = true;
-        for (int p = 0; p < 6; ++p)
+        if (!visible)
         {
-            const vec3 n  = u_Frustum[p].xyz;
-            const float d = u_Frustum[p].w;
+            const vec3 localCenter = (mesh.AABBMin + mesh.AABBMax) * 0.5;
+            const vec3 localExtent = (mesh.AABBMax - mesh.AABBMin) * 0.5;
+            const vec3 worldCenter = (inst.Model * vec4(localCenter, 1.0)).xyz;
 
-            // Проекция коробки на нормаль: dist ± dot(|n|, extent).
-            if (dot(n, worldCenter) + d < -dot(abs(n), worldExtent))
+            const mat3 absBasis = mat3(abs(inst.Model[0].xyz),
+                                       abs(inst.Model[1].xyz),
+                                       abs(inst.Model[2].xyz));
+            const vec3 worldExtent = absBasis * localExtent;
+
+            visible = true;
+            for (int p = 0; p < 6; ++p)
             {
-                visible = false;
-                break;
+                const vec3  n = u_Frustum[p].xyz;
+                const float d = u_Frustum[p].w;
+                if (dot(n, worldCenter) + d < -dot(abs(n), worldExtent))
+                {
+                    visible = false;
+                    break;
+                }
             }
         }
+
+        if (visible)
+            atomicOr(s_anyVisible, 1u);
     }
 
-    if (!visible)
-        return;
+    barrier();
 
-    const uint slot = atomicAdd(drawCount, 1u);
-    if (slot >= u_MaxDraws)
-        return;   // защита от переполнения буфера команд
+    // FIX: проверка границы ДО инкремента счётчика (раньше atomicAdd
+    // выполнялся всегда, и drawCount мог "уехать" за u_MaxDraws).
+    if (lane == 0u && s_anyVisible != 0u)
+    {
+        const uint slot = atomicAdd(drawCount, 1u);
+        if (slot >= u_MaxDraws)
+            return;
 
-    DrawElementsIndirect cmd;
-    cmd.Count         = mesh.IndexCount;
-    cmd.InstanceCount = 1u;
-    cmd.FirstIndex    = mesh.BaseIndex;
-    cmd.BaseVertex    = mesh.BaseVertex;
-    cmd.BaseInstance  = instanceIndex;
-    draws[slot] = cmd;
+        draws[slot] = tpl;
 
-    // Статистика для панели Stats (читается обратно на CPU с задержкой).
-    atomicAdd(vertexCount, mesh.VertexCount);
-    atomicAdd(indexCount,  mesh.IndexCount);
+        const MeshGPU m = meshes[instances[base].MeshId];
+        atomicAdd(vertexCount,          m.VertexCount * count);
+        atomicAdd(indexCount,           m.IndexCount  * count);
+        atomicAdd(visibleInstanceCount, count);
+    }
 }
