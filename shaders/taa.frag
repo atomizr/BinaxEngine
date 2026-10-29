@@ -1,20 +1,5 @@
 #version 460 core
 
-// ---------------------------------------------------------------------------
-// TAA (temporal anti-aliasing).
-//
-// Вход: текущий HDR-кадр, velocity-буфер и история предыдущего кадра.
-// Выход: сглаженный HDR.
-//
-// Клампинг истории — variance clipping в YCoCg (mean ± gamma*sigma): держит
-// историю в пределах локального диапазона текущего кадра, убирая ghosting
-// на движущихся объектах, но не «замораживая» плоские области.
-//
-// ВАЖНО (эмпирически проверено): репроекция по Y инвертируется —
-// prevUV = uv + vec2(vel.x, -vel.y). Вариант с +vel по обеим осям даёт
-// в разы больше остаточного дрожания.
-// ---------------------------------------------------------------------------
-
 in  vec2 v_UV;
 out vec4 FragColor;
 
@@ -23,14 +8,14 @@ uniform sampler2D u_VelocityTexture;
 uniform sampler2D u_HistoryTexture;
 uniform sampler2D u_DepthTexture;
 
-uniform vec2  u_TexelSize;      // 1 / resolution
+uniform vec2  u_TexelSize;
 uniform vec2  u_Resolution;
-uniform float u_HistoryWeight;  // 0..1
+uniform float u_HistoryWeight;
 uniform int   u_HistoryValid;
-uniform float u_ClampGamma;     // ширина variance-клампа
+uniform float u_ClampGamma;
 
-uniform mat4  u_ViewProj;       // текущая (с jitter) view-projection
-uniform mat4  u_PrevViewProj;   // предыдущая (с jitter)
+uniform mat4  u_ViewProj;
+uniform mat4  u_PrevViewProj;
 uniform mat4  u_InvViewProj;
 uniform vec3  u_CameraPosition;
 
@@ -55,8 +40,6 @@ bool IsFinite(vec3 v)
     return !(any(isNan) || any(isInf));
 }
 
-// Velocity для неба: репроецируем направление луча (w = 0) — без параллакса
-// от перемещения камеры. Та же UV-конвенция, что и у геометрии.
 vec2 SkyVelocity(vec2 uv)
 {
     const vec4 far = u_InvViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
@@ -83,7 +66,11 @@ void main()
     if (any(isnan(vel)) || any(isinf(vel)))
         vel = vec2(0.0);
 
-    const vec2 prevUV = v_UV + vec2(vel.x, -vel.y);
+    // FIX: убран y-flip. geometry.vert вычисляет velocity в UV-пространстве
+    // (curr - prev), и motion_blur.frag использует её как vec2(vel.x, vel.y),
+    // без инверсии Y. TAA обязан следовать тому же соглашению, иначе
+    // репроекция зеркальна по вертикали → ghosting.
+    const vec2 prevUV = v_UV + vel;
 
     if (u_HistoryValid == 0 ||
         !IsFinite(current) ||
@@ -94,7 +81,6 @@ void main()
         return;
     }
 
-    // ---- Neighborhood statistics в YCoCg ----
     const vec3 curY = RGBToYCoCg(max(current, vec3(0.0)));
 
     vec3 m1 = vec3(0.0);
@@ -119,12 +105,10 @@ void main()
     lo = min(lo, curY);
     hi = max(hi, curY);
 
-    // ---- История ----
     const vec3 historyY = RGBToYCoCg(max(texture(u_HistoryTexture, prevUV).rgb,
                                          vec3(0.0)));
     const vec3 clampedHistory = clamp(historyY, lo, hi);
 
-    // ---- Вес истории ----
     const float speedPx = length(vel * u_Resolution);
     float weight = u_HistoryWeight;
     weight *= 1.0 - smoothstep(24.0, 96.0, speedPx);
