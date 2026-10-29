@@ -16,9 +16,6 @@
 
 namespace {
 
-
-
-
 glm::vec2 HaltonJitter(uint32_t frame, uint32_t width, uint32_t height)
 {
     auto halton = [](uint32_t index, uint32_t base)
@@ -38,9 +35,7 @@ glm::vec2 HaltonJitter(uint32_t frame, uint32_t width, uint32_t height)
     const float jx = halton(index, 2u) - 0.5f;
     const float jy = halton(index, 3u) - 0.5f;
 
-    
-    
-    constexpr float kAmplitude = 0.7f;   
+    constexpr float kAmplitude = 0.7f;
     return glm::vec2(jx * kAmplitude * 2.0f / static_cast<float>(width > 0 ? width : 1),
                      jy * kAmplitude * 2.0f / static_cast<float>(height > 0 ? height : 1));
 }
@@ -87,14 +82,15 @@ DeferredRenderer::~DeferredRenderer()
     if (m_DrawIndirectSSBO) glDeleteBuffers(1, &m_DrawIndirectSSBO);
     if (m_BonesDummySSBO)   glDeleteBuffers(1, &m_BonesDummySSBO);
     if (m_DrawStateSSBO)    glDeleteBuffers(1, &m_DrawStateSSBO);
+    if (m_GroupDataSSBO)    glDeleteBuffers(1, &m_GroupDataSSBO);   // FIX
 }
 
 void DeferredRenderer::InitCullResources()
 {
-    
     glGenBuffers(1, &m_DrawStateSSBO);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_DrawStateSSBO);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, 3 * sizeof(uint32_t),
+    // FIX: 4 вместо 3 uint — добавлен visibleInstanceCount
+    glBufferData(GL_SHADER_STORAGE_BUFFER, 4 * sizeof(uint32_t),
                  nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
@@ -115,10 +111,6 @@ void DeferredRenderer::Resize(uint32_t width, uint32_t height)
     if (width == m_GBuffer->GetWidth() && height == m_GBuffer->GetHeight())
         return;
 
-    
-    
-    
-    
     m_GBuffer->Resize(width, height);
 
     if (m_HDRFBO)          m_HDRFBO->Resize(width, height);
@@ -126,11 +118,10 @@ void DeferredRenderer::Resize(uint32_t width, uint32_t height)
     if (m_TAAHistory[0])   m_TAAHistory[0]->Resize(width, height);
     if (m_TAAHistory[1])   m_TAAHistory[1]->Resize(width, height);
 
-    
-    
     m_TAAHistoryValid = false;
     m_HasPrevViewProj = false;
     m_TaaFrameIndex   = 0;
+    m_PrevJitter      = glm::vec2(0.0f);   // FIX: сброс при resize
 }
 
 void DeferredRenderer::ClearGBuffer()
@@ -159,7 +150,6 @@ void DeferredRenderer::UpdateJitter(uint32_t width, uint32_t height)
 
 glm::mat4 DeferredRenderer::JitteredProjection(const glm::mat4& projection) const
 {
-    
     glm::mat4 jitter(1.0f);
     jitter[3][0] = m_Jitter.x;
     jitter[3][1] = m_Jitter.y;
@@ -194,7 +184,14 @@ void DeferredRenderer::EnsurePostTargets(uint32_t width, uint32_t height)
     }
     else m_LDRFBO->Resize(width, height);
 
-    
+    // FIX: FXAA сэмплирует LDR с билинейной интерполяцией. Раньше фильтр
+    // менялся в ApplyFXAA при каждом вызове (побочный эффект на весь FBO).
+    // Теперь выставляем LINEAR один раз после создания/ресайза.
+    glBindTexture(GL_TEXTURE_2D, m_LDRFBO->GetColorAttachment(0));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
     if (!m_PostFBO)
     {
         m_PostFBO = std::make_unique<Framebuffer>(width, height);
@@ -205,7 +202,6 @@ void DeferredRenderer::EnsurePostTargets(uint32_t width, uint32_t height)
     }
     else m_PostFBO->Resize(width, height);
 
-    
     for (uint32_t i = 0; i < kBloomMipCount; ++i)
     {
         const uint32_t mipW = std::max(1u, width  >> (i + 1));
@@ -219,8 +215,6 @@ void DeferredRenderer::EnsurePostTargets(uint32_t width, uint32_t height)
             m_BloomMips[i]->CheckStatus();
             m_BloomMips[i]->Unbind();
 
-            
-            
             glBindTexture(GL_TEXTURE_2D, m_BloomMips[i]->GetColorAttachment(0));
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -239,9 +233,6 @@ void DeferredRenderer::EnsurePostTargets(uint32_t width, uint32_t height)
             m_TAAHistory[i]->CheckStatus();
             m_TAAHistory[i]->Unbind();
 
-            
-            
-            
             glBindTexture(GL_TEXTURE_2D, m_TAAHistory[i]->GetColorAttachment(0));
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -260,11 +251,8 @@ void DeferredRenderer::EnsurePostTargets(uint32_t width, uint32_t height)
 
 void DeferredRenderer::InitShaders()
 {
-    const std::string dir = "resources/shaders/";
+    const std::string dir = "shaders/";
 
-    
-    
-    
     const std::string geometryVert = Paths::Resolve(dir + "geometry.vert");
     const std::string geometryFrag = Paths::Resolve(dir + "geometry.frag");
     const std::string lightingVert = Paths::Resolve(dir + "lighting.vert");
@@ -276,16 +264,12 @@ void DeferredRenderer::InitShaders()
     m_LightingShader = Shader::FromFiles(lightingVert, lightingFrag);
     m_FXAAShader     = Shader::FromFiles(fxaaVert, fxaaFrag);
 
-    
     m_TAAShader     = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "taa.frag"));
     m_TonemapShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "tonemap.frag"));
     m_MotionBlurShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "motion_blur.frag"));
     m_BloomDownShader  = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "bloom_down.frag"));
     m_BloomUpShader    = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "bloom_up.frag"));
 
-    
-    
-    
     const std::string cullPath = Paths::Resolve(dir + "frustum_cull.comp");
     try
     {
@@ -316,6 +300,14 @@ void DeferredRenderer::EnsureDrawBuffers(uint32_t drawCount)
                  nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
 
+    // FIX: отдельный SSBO для шаблонов групп (используется culling-шейдером).
+    if (m_GroupDataSSBO == 0) glGenBuffers(1, &m_GroupDataSSBO);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_GroupDataSSBO);
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+                 (GLsizeiptr)(cap * sizeof(DrawElementsIndirect)),
+                 nullptr, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
     if (m_BonesDummySSBO == 0)
     {
         glGenBuffers(1, &m_BonesDummySSBO);
@@ -332,37 +324,37 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
 {
     if (frame.Draws.empty()) return;
 
-    
     MaterialLibrary::Get().Flush();
-
-    
     InstanceBuffer::Get().Upload(frame.Instances);
 
-    const uint32_t instanceCount = (uint32_t)frame.Instances.size();
+    const uint32_t groupCount = (uint32_t)frame.Draws.size();   // FIX: работаем в группах
     const bool gpuCull = m_FrustumCullingEnabled && m_CullShader != nullptr &&
-                         instanceCount > 0;
+                         !frame.Instances.empty();
 
-    
-    
-    EnsureDrawBuffers(gpuCull ? instanceCount : (uint32_t)frame.Draws.size());
+    EnsureDrawBuffers(groupCount);   // FIX: буферы под количество групп, не инстансов
 
-    
-    
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_DrawIndirectSSBO);
 
     if (!gpuCull)
     {
         glBufferSubData(GL_DRAW_INDIRECT_BUFFER, 0,
-                        (GLsizeiptr)(frame.Draws.size() * sizeof(DrawElementsIndirect)),
+                        (GLsizeiptr)(groupCount * sizeof(DrawElementsIndirect)),
                         frame.Draws.data());
     }
+    else
+    {
+        // FIX: загружаем шаблоны draw-команд в отдельный SSBO.
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_GroupDataSSBO);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+                        (GLsizeiptr)(groupCount * sizeof(DrawElementsIndirect)),
+                        frame.Draws.data());
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    }
 
-    
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, InstanceBuffer::Get().GetSSBO());
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, MaterialLibrary::Get().GetMaterialSSBO());
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_BonesDummySSBO);
 
-    
     m_GBuffer->Bind();
     glViewport(0, 0, (GLsizei)m_GBuffer->GetWidth(), (GLsizei)m_GBuffer->GetHeight());
 
@@ -373,21 +365,11 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
     glDisable(GL_CULL_FACE);
     glFrontFace(GL_CCW);
 
-    
-    
-    
     if (gpuCull)
-        PrepareCullPass(viewMatrix, projectionMatrix, instanceCount);
+        PrepareCullPass(viewMatrix, projectionMatrix, groupCount);
 
-    
-    
-    
     const glm::mat4 projectionJittered = JitteredProjection(projectionMatrix);
 
-    
-    
-    
-    
     if (!m_HasPrevViewProj)
     {
         m_PrevViewProj    = projectionJittered * viewMatrix;
@@ -399,17 +381,14 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
     m_GeometryShader->SetMat4("u_Projection",    projectionJittered);
     m_GeometryShader->SetMat4("u_PrevViewProj",  m_PrevViewProj);
 
-    
     MeshLibrary::Get().BindVAO();
     if (gpuCull)
     {
-        
-        
         glBindBuffer(GL_PARAMETER_BUFFER, m_DrawStateSSBO);
         glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT,
                                          (void*)0,
                                           0,
-                                         (GLsizei)instanceCount,
+                                         (GLsizei)groupCount,   // FIX
                                          0);
         glBindBuffer(GL_PARAMETER_BUFFER, 0);
     }
@@ -417,32 +396,28 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
     {
         glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT,
                                     (void*)0,
-                                    (GLsizei)frame.Draws.size(),
+                                    (GLsizei)groupCount,
                                     0);
     }
     glBindVertexArray(0);
 
-    
     if (gpuCull)
     {
-        
         m_FrameStats.GpuCulling       = true;
         m_FrameStats.DrawCalls        = m_LastCullStats.Draws;
-        m_FrameStats.VisibleInstances = m_LastCullStats.Draws;
+        // FIX: реальное число видимых инстансов из SSBO (раньше ошибочно
+        // приравнивалось к числу draw call'ов).
+        m_FrameStats.VisibleInstances = m_LastCullStats.VisibleInstances;
         m_FrameStats.Vertices         = m_LastCullStats.Vertices;
         m_FrameStats.Triangles        = m_LastCullStats.Indices / 3;
 
-        
-        
-        
-        
         if (m_CullFence == nullptr)
             m_CullFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     }
     else
     {
         m_FrameStats.GpuCulling = false;
-        m_FrameStats.DrawCalls += (uint32_t)frame.Draws.size();
+        m_FrameStats.DrawCalls += groupCount;
         for (size_t i = 0; i < frame.Draws.size(); ++i)
         {
             const auto& d = frame.Draws[i];
@@ -463,13 +438,12 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
 
 void DeferredRenderer::PrepareCullPass(const glm::mat4& viewMatrix,
                                        const glm::mat4& projectionMatrix,
-                                       uint32_t instanceCount)
+                                       uint32_t groupCount)
 {
-    
     PollCullStats();
 
-    
-    static const GLuint kZeroState[3] = { 0u, 0u, 0u };
+    // FIX: 4 uint вместо 3
+    static const GLuint kZeroState[4] = { 0u, 0u, 0u, 0u };
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_DrawStateSSBO);
     glClearBufferSubData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, 0,
                          sizeof(kZeroState), GL_RED_INTEGER, GL_UNSIGNED_INT,
@@ -477,17 +451,14 @@ void DeferredRenderer::PrepareCullPass(const glm::mat4& viewMatrix,
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
 
-    
-    
-    
     if (MeshLibrary::Get().GetMeshSSBO() == 0)
         MeshLibrary::Get().Flush();
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, MeshLibrary::Get().GetMeshSSBO());
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_DrawIndirectSSBO);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_DrawStateSSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_GroupDataSSBO);   // FIX
 
-    
     const glm::mat4 viewProj  = projectionMatrix * viewMatrix;
     const Frustum   frustum   = Frustum::FromViewProjection(viewProj);
 
@@ -497,14 +468,12 @@ void DeferredRenderer::PrepareCullPass(const glm::mat4& viewMatrix,
         const std::string name = "u_Frustum[" + std::to_string(i) + "]";
         m_CullShader->SetVec4(name, frustum.Planes[i]);
     }
-    m_CullShader->SetUInt("u_InstanceCount", instanceCount);
-    m_CullShader->SetUInt("u_MaxDraws",      m_DrawCapacity);
+    // FIX: dispatch по числу групп, не инстансов
+    m_CullShader->SetUInt("u_GroupCount", groupCount);
+    m_CullShader->SetUInt("u_MaxDraws",   groupCount);
 
-    
-    
-    
-    const GLuint groups = (instanceCount + kCullGroupSize - 1u) / kCullGroupSize;
-    glDispatchCompute(groups, 1, 1);
+    // 1 workgroup на 1 группу инстансов (local_size_x = 64 — потоки внутри группы).
+    glDispatchCompute(groupCount, 1, 1);
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 
     m_CullShader->Unbind();
@@ -519,14 +488,15 @@ void DeferredRenderer::PollCullStats()
 
     if (status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED)
     {
-        uint32_t values[3] = { 0u, 0u, 0u };
+        uint32_t values[4] = { 0u, 0u, 0u, 0u };   // FIX: 4 значения
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_DrawStateSSBO);
         glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(values), values);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-        m_LastCullStats.Draws    = values[0];
-        m_LastCullStats.Vertices = values[1];
-        m_LastCullStats.Indices  = values[2];
+        m_LastCullStats.Draws            = values[0];
+        m_LastCullStats.Vertices         = values[1];
+        m_LastCullStats.Indices          = values[2];
+        m_LastCullStats.VisibleInstances = values[3];   // FIX
 
         glDeleteSync(m_CullFence);
         m_CullFence = nullptr;
@@ -536,22 +506,16 @@ void DeferredRenderer::PollCullStats()
         glDeleteSync(m_CullFence);
         m_CullFence = nullptr;
     }
-    
 }
 
 void DeferredRenderer::DrawFullscreenQuad()
 {
-    
     if (!MeshLibrary::Get().IsValid(m_QuadHandle))
         return;
 
     const MeshGPU& q = MeshLibrary::Get().Get(m_QuadHandle);
     MeshLibrary::Get().BindVAO();
 
-    
-    
-    
-    
     glDrawElementsBaseVertex(
         GL_TRIANGLES,
         q.IndexCount,
@@ -580,9 +544,6 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
 
     EnsurePostTargets(targetW, targetH);
 
-    
-    
-    
     const glm::mat4 projJittered = JitteredProjection(projectionMatrix);
     const glm::mat4 viewProj     = projJittered * viewMatrix;
     const glm::mat4 invViewProj  = glm::inverse(viewProj);
@@ -593,7 +554,6 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
         m_HasPrevViewProj = true;
     }
 
-    
     m_HDRFBO->Bind();
     glViewport(0, 0, (GLsizei)targetW, (GLsizei)targetH);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -626,7 +586,6 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
     const int count = (int)std::min<size_t>(lights.size(), (size_t)kMaxLights);
     m_LightingShader->SetInt("u_LightCount", count);
 
-    
     m_LightingShader->SetInt  ("u_FogEnabled", post.FogEnabled ? 1 : 0);
     m_LightingShader->SetInt  ("u_FogMode",    post.FogMode);
     m_LightingShader->SetVec3 ("u_FogColor",   post.FogColor);
@@ -655,14 +614,12 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
     m_LightingShader->Unbind();
     m_HDRFBO->Unbind();
 
-    
     const bool useTAA  = taa.Enabled && m_TAAEnabled &&
                          m_TAAShader != nullptr && m_TonemapShader != nullptr;
     const bool useFXAA = !useTAA && fxaa.Enabled && m_FXAAShader != nullptr;
 
     uint32_t source = m_HDRFBO->GetColorAttachment(0);
 
-    
     const float projC = projectionMatrix[2][2];
     const float projD = projectionMatrix[3][2];
     const float nearPlane = (projC != 1.0f) ? projD / (projC - 1.0f) : 0.1f;
@@ -691,7 +648,6 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
 
     if (useFXAA && m_LDRFBO)
     {
-        
         ApplyTonemap(source, m_LDRFBO->GetFramebufferID(), targetW, targetH,
                      post, bloomTexture, timeSeconds);
         ApplyFXAA(m_LDRFBO->GetColorAttachment(0), targetFBO, targetW, targetH, fxaa);
@@ -706,7 +662,6 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
     m_FrameStats.TaaFrameIndex = m_TaaFrameIndex;
     m_FrameStats.PostFXActive  = post.Enabled;
 
-    
     m_PrevViewProj = viewProj;
     m_PrevJitter   = m_Jitter;
 
@@ -823,7 +778,6 @@ void DeferredRenderer::BuildBloom(uint32_t sourceTexture,
     glDepthMask(GL_FALSE);
     glDisable(GL_BLEND);
 
-    
     const uint32_t mip0W = std::max(1u, width  >> 1);
     const uint32_t mip0H = std::max(1u, height >> 1);
 
@@ -841,7 +795,6 @@ void DeferredRenderer::BuildBloom(uint32_t sourceTexture,
     DrawFullscreenQuad();
     m_BloomDownShader->Unbind();
 
-    
     for (uint32_t i = 1; i < kBloomMipCount; ++i)
     {
         const uint32_t srcW = std::max(1u, width  >> i);
@@ -863,8 +816,6 @@ void DeferredRenderer::BuildBloom(uint32_t sourceTexture,
         m_BloomDownShader->Unbind();
     }
 
-    
-    
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE);
 
@@ -914,7 +865,6 @@ void DeferredRenderer::ApplyTonemap(uint32_t sourceTexture, uint32_t targetFBO,
     m_TonemapShader->SetInt  ("u_BloomTexture", 1);
     m_TonemapShader->SetFloat("u_Exposure", glm::max(params.Exposure, 0.01f));
 
-    
     m_TonemapShader->SetInt  ("u_TonemapMode", params.TonemapMode);
     m_TonemapShader->SetFloat("u_Contrast",    params.Contrast);
     m_TonemapShader->SetFloat("u_Saturation",  params.Saturation);
@@ -927,24 +877,20 @@ void DeferredRenderer::ApplyTonemap(uint32_t sourceTexture, uint32_t targetFBO,
                               glm::vec2((float)width, (float)height));
     m_TonemapShader->SetFloat("u_Time", timeSeconds);
 
-    
     m_TonemapShader->SetInt  ("u_BloomEnabled",
                               (params.Enabled && params.BloomEnabled && bloomTexture != 0) ? 1 : 0);
     m_TonemapShader->SetFloat("u_BloomIntensity",
                               glm::max(params.BloomIntensity, 0.0f));
 
-    
     m_TonemapShader->SetInt  ("u_LensEnabled",
                               (params.Enabled && params.LensDistortionEnabled) ? 1 : 0);
     m_TonemapShader->SetFloat("u_LensDistortion", params.LensDistortion);
 
-    
     m_TonemapShader->SetInt  ("u_CAEnabled",
                               (params.Enabled && params.ChromaticAberrationEnabled) ? 1 : 0);
     m_TonemapShader->SetFloat("u_CAStrength",
                               glm::clamp(params.ChromaticAberration, 0.0f, 1.0f));
 
-    
     m_TonemapShader->SetInt  ("u_VignetteEnabled",
                               (params.Enabled && params.VignetteEnabled) ? 1 : 0);
     m_TonemapShader->SetFloat("u_VignetteIntensity",
@@ -952,7 +898,6 @@ void DeferredRenderer::ApplyTonemap(uint32_t sourceTexture, uint32_t targetFBO,
     m_TonemapShader->SetFloat("u_VignetteSmoothness",
                               glm::clamp(params.VignetteSmoothness, 0.0f, 1.0f));
 
-    
     m_TonemapShader->SetInt  ("u_GrainEnabled",
                               (params.Enabled && params.FilmGrainEnabled) ? 1 : 0);
     m_TonemapShader->SetFloat("u_GrainIntensity",
@@ -980,8 +925,9 @@ void DeferredRenderer::ApplyFXAA(uint32_t sourceTexture,
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, sourceTexture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // FIX: убраны glTexParameteri(...) — фильтр LDR-текстуры теперь
+    // выставляется один раз в EnsurePostTargets и не сбивается повторными
+    // вызовами ApplyFXAA.
 
     m_FXAAShader->Bind();
     m_FXAAShader->SetInt  ("u_ColorTexture",     0);
@@ -996,4 +942,4 @@ void DeferredRenderer::ApplyFXAA(uint32_t sourceTexture,
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-} 
+}
