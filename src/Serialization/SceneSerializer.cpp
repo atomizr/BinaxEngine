@@ -57,8 +57,8 @@ void SceneSerializer::Serialize(entt::registry& registry, const std::string& fil
     
     
     std::vector<entt::entity> entities;
-// FIX: registry.view<entt::entity>() невалиден — entity не является компонентом.
-// Используем storage<entt::entity>() для итерации по всем сущностям.
+
+
 for (auto entity : registry.storage<entt::entity>())
 {
     if (!registry.any_of<SystemEntityTag>(entity))

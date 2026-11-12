@@ -1,4 +1,4 @@
-// ECS/Systems/RenderSystem.h
+
 #pragma once
 
 #include <entt/entt.hpp>
@@ -7,7 +7,7 @@
 #include <vector>
 
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_inverse.hpp>   // FIX: для glm::inverseTranspose
+#include <glm/gtc/matrix_inverse.hpp>   
 
 #include "Renderer/DeferredRenderer.h"
 #include "Renderer/DrawCommand.h"
@@ -107,12 +107,12 @@ public:
                 g.Model       = cands[k].Model;
                 g.PrevModel   = cands[k].PrevModel;
 
-                // FIX: нормальная матрица вычисляется на CPU один раз
-                // вместо дорогого inverse() в вершинном шейдере на каждый
-                // кадр / каждый вершину.
-                // Для матрицы без неравномерного масштаба можно было бы
-                // использовать просто mat3(Model), но inverseTranspose
-                // корректно обрабатывает все случаи.
+                
+                
+                
+                
+                
+                
                 g.NormalMatrix = glm::inverseTranspose(cands[k].Model);
 
                 g.MaterialId  = cands[k].Material;

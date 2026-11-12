@@ -10,14 +10,14 @@ struct InstanceGPU
 {
     glm::mat4 Model;
     glm::mat4 PrevModel;
-    glm::mat4 NormalMatrix;   // NEW: нормальная матрица для вершинного шейдера
+    glm::mat4 NormalMatrix;   
     uint32_t  MaterialId = 0;
     uint32_t  MeshId     = 0;
     uint32_t  BoneOffset = 0;
     uint32_t  Flags      = 0;
 };
 
-// FIX: 64 + 64 + 64 + 16 = 208
+
 static_assert(sizeof(InstanceGPU) == 208, "InstanceGPU must be 208 bytes");
 
 namespace InstanceFlags {

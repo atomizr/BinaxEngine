@@ -1678,9 +1678,9 @@ void EditorUI::LoadEditorFont()
     }
     else
     {
-        // FIX: НЕ вызываем std::free(buf). ImFontAtlas::AddFontFromMemoryTTF
-        // забирает владение буфером ВСЕГДА, включая случай ошибки парсинга —
-        // иначе double-free.
+        
+        
+        
         BINAX_LOG_WARN("[Editor] Failed to parse font '{}'", fontPath);
     }
 }

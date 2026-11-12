@@ -13,10 +13,10 @@ namespace Binax {
 using MaterialHandle = uint32_t;
 constexpr MaterialHandle kInvalidMaterial = 0xFFFFFFFFu;
 
-// Раскладка должна точно совпадать с struct MaterialGPU в geometry.frag (std430):
-//   vec4 AlbedoRoughness;  vec4 MetallicAOEms;  vec4 SkyReflParams;  vec4 StrengthA;
-//   uvec2 AlbedoHandle;    uvec2 NormalHandle;  uvec2 MetallicHandle;
-//   uvec2 RoughnessHandle; uvec2 AOHandle;      uvec2 EmissiveHandle; vec4 StrengthB;
+
+
+
+
 struct MaterialGPU
 {
     glm::vec4     AlbedoRoughness{ 0.8f, 0.8f, 0.8f, 0.5f };
@@ -93,4 +93,4 @@ private:
     bool     m_Dirty = true;
 };
 
-} // namespace Binax
+} 

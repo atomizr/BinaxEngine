@@ -184,9 +184,9 @@ private:
     uint32_t m_BonesDummySSBO   = 0;
     uint32_t m_DrawCapacity     = 0;
 
-    // FIX: отдельный SSBO для шаблонов draw-команд по группам.
-    // Раньше culling-шейдер не мог восстановить принадлежность инстансов к
-    // группе, поэтому создавал по draw на инстанс.
+    
+    
+    
     uint32_t m_GroupDataSSBO    = 0;
 
     uint32_t m_DrawStateSSBO = 0;
@@ -197,7 +197,7 @@ private:
         uint32_t Draws             = 0;
         uint32_t Vertices          = 0;
         uint32_t Indices           = 0;
-        uint32_t VisibleInstances  = 0;   // FIX: отдельный счётчик
+        uint32_t VisibleInstances  = 0;   
     };
     CullStats m_LastCullStats;
 
@@ -239,7 +239,7 @@ private:
                       uint32_t bloomTexture,
                       float timeSeconds);
 
-    // FIX: groupCount вместо instanceCount
+    
     void PrepareCullPass(const glm::mat4& viewMatrix,
                          const glm::mat4& projectionMatrix,
                          uint32_t groupCount);

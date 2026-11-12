@@ -66,10 +66,10 @@ void main()
     if (any(isnan(vel)) || any(isinf(vel)))
         vel = vec2(0.0);
 
-    // FIX: убран y-flip. geometry.vert вычисляет velocity в UV-пространстве
-    // (curr - prev), и motion_blur.frag использует её как vec2(vel.x, vel.y),
-    // без инверсии Y. TAA обязан следовать тому же соглашению, иначе
-    // репроекция зеркальна по вертикали → ghosting.
+    
+    
+    
+    
     const vec2 prevUV = v_UV + vel;
 
     if (u_HistoryValid == 0 ||

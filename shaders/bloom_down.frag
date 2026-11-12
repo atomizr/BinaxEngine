@@ -1,15 +1,15 @@
 #version 460 core
 
-// ---------------------------------------------------------------------------
-// Bloom: bright pass + downsample (13 taps, COD-стиль).
-// Первый проход (u_FirstPass = 1) дополнительно применяет порог яркости.
-// ---------------------------------------------------------------------------
+
+
+
+
 
 in  vec2 v_UV;
 out vec4 FragColor;
 
 uniform sampler2D u_Source;
-uniform vec2  u_TexelSize;    // 1 / размер источника
+uniform vec2  u_TexelSize;    
 uniform int   u_FirstPass;
 uniform float u_Threshold;
 

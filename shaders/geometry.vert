@@ -10,7 +10,7 @@ layout(location = 4) in vec4  a_BoneWeights;
 struct InstanceGPU {
     mat4 Model;
     mat4 PrevModel;
-    mat4 NormalMatrix;   // FIX: нормальная матрица, передаётся с CPU
+    mat4 NormalMatrix;   
     uint MaterialId;
     uint MeshId;
     uint BoneOffset;
@@ -67,8 +67,8 @@ void main()
     v_Velocity = velocity;
     v_WorldPos = worldPos.xyz;
 
-    // FIX: используем готовую нормальную матрицу вместо
-    // дорогого mat3(transpose(inverse(inst.Model)))
+    
+    
     v_Normal = normalize(mat3(inst.NormalMatrix) * localNormal);
 
     v_UV            = a_UV;

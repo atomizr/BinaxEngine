@@ -65,4 +65,4 @@ private:
     bool     m_VAOReady = false;
 };
 
-} // namespace Binax
+} 

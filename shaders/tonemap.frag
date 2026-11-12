@@ -1,12 +1,12 @@
 #version 460 core
 
-// ---------------------------------------------------------------------------
-// Финальный пост-проход: lens → CA → bloom → tonemap → color grade →
-// vignette → film grain.
-//
-// Тонамаппер выбирается в Post Processing (u_TonemapMode):
-//   0 ACES, 1 Reinhard, 2 Filmic (Uncharted 2), 3 AgX, 4 Linear.
-// ---------------------------------------------------------------------------
+
+
+
+
+
+
+
 
 in  vec2 v_UV;
 out vec4 FragColor;
@@ -19,7 +19,7 @@ uniform int   u_TonemapMode;
 uniform int   u_BloomEnabled;
 uniform float u_BloomIntensity;
 
-// ---- Color grade ----
+
 uniform float u_Contrast;
 uniform float u_Saturation;
 uniform float u_Temperature;
@@ -43,11 +43,11 @@ uniform float u_GrainIntensity;
 uniform float u_Time;
 uniform vec2  u_Resolution;
 
-// ---------------------------------------------------------------------------
-// Тонамапперы
-// ---------------------------------------------------------------------------
 
-// ACES fitted (Narkowicz 2015).
+
+
+
+
 vec3 TonemapACES(vec3 x)
 {
     const float a = 2.51;
@@ -63,7 +63,7 @@ vec3 TonemapReinhard(vec3 x)
     return x / (1.0 + x);
 }
 
-// Uncharted 2 filmic curve (Hable).
+
 vec3 TonemapFilmic(vec3 x)
 {
     const float A = 0.15;
@@ -82,8 +82,8 @@ vec3 TonemapFilmic(vec3 x)
     return curve / white;
 }
 
-// AgX (приближение Blender): inset-матрица → лог-кодирование → сигмоида →
-// outset-матрица. Не эталонная реализация, но даёт характерный AgX-вид.
+
+
 vec3 TonemapAgX(vec3 x)
 {
     const mat3 agxIn = mat3(
@@ -122,7 +122,7 @@ vec3 ApplyTonemap(vec3 x)
     return clamp(x, 0.0, 1.0);
 }
 
-// Бочка/подушка: смещение пропорционально квадрату радиуса.
+
 vec2 DistortUV(vec2 uv)
 {
     if (u_LensEnabled == 0)
@@ -142,7 +142,7 @@ void main()
 {
     const vec2 uv = DistortUV(v_UV);
 
-    // ---- Chromatic aberration ----
+    
     const vec2  dir = uv - 0.5;
     const float ca  = (u_CAEnabled != 0) ? u_CAStrength * 0.01 : 0.0;
 
@@ -151,42 +151,42 @@ void main()
     hdr.g = texture(u_HDRTexture, uv).g;
     hdr.b = texture(u_HDRTexture, clamp(uv - dir * ca, vec2(0.0), vec2(1.0))).b;
 
-    // ---- Bloom (аддитивно, в HDR до тонамаппинга) ----
+    
     if (u_BloomEnabled != 0)
         hdr += texture(u_BloomTexture, uv).rgb * u_BloomIntensity;
 
-    // ---- Экспозиция + выбранный тонамаппер ----
+    
     hdr = max(hdr * u_Exposure, vec3(0.0));
 
     vec3 color = ApplyTonemap(hdr);
     color = pow(color, vec3(1.0 / 2.2));
 
-    // ---- Color grade (в display space) ----
-    // Баланс белого: температура тянет R↑/B↓, tint — G↑.
+    
+    
     color *= vec3(1.0 + 0.20 * u_Temperature,
                   1.0 + 0.10 * u_Tint,
                   1.0 - 0.20 * u_Temperature);
 
-    // Lift / Gamma / Gain — классическая формула цветокоррекции.
+    
     color = color * u_Gain + u_Lift * (1.0 - color);
     color = pow(max(color, vec3(0.0)), 1.0 / max(u_Gamma, vec3(0.01)));
 
-    // Контраст и насыщенность.
+    
     color = (color - 0.5) * u_Contrast + 0.5;
     const float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
     color = mix(vec3(luma), color, u_Saturation);
     color = max(color, vec3(0.0));
 
-    // ---- Vignette ----
+    
     if (u_VignetteEnabled != 0)
     {
-        const float d     = length(v_UV - 0.5) * 1.41421356;   // 0 в центре, 1 в углу
+        const float d     = length(v_UV - 0.5) * 1.41421356;   
         const float inner = clamp(1.0 - u_VignetteSmoothness, 0.0, 1.0);
         const float vig   = smoothstep(inner, 1.0, d);
         color *= 1.0 - u_VignetteIntensity * vig;
     }
 
-    // ---- Film grain ----
+    
     if (u_GrainEnabled != 0)
     {
         const float n = Hash(v_UV * u_Resolution + vec2(u_Time * 137.0)) - 0.5;

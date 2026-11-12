@@ -82,14 +82,14 @@ DeferredRenderer::~DeferredRenderer()
     if (m_DrawIndirectSSBO) glDeleteBuffers(1, &m_DrawIndirectSSBO);
     if (m_BonesDummySSBO)   glDeleteBuffers(1, &m_BonesDummySSBO);
     if (m_DrawStateSSBO)    glDeleteBuffers(1, &m_DrawStateSSBO);
-    if (m_GroupDataSSBO)    glDeleteBuffers(1, &m_GroupDataSSBO);   // FIX
+    if (m_GroupDataSSBO)    glDeleteBuffers(1, &m_GroupDataSSBO);   
 }
 
 void DeferredRenderer::InitCullResources()
 {
     glGenBuffers(1, &m_DrawStateSSBO);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_DrawStateSSBO);
-    // FIX: 4 вместо 3 uint — добавлен visibleInstanceCount
+    
     glBufferData(GL_SHADER_STORAGE_BUFFER, 4 * sizeof(uint32_t),
                  nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
@@ -121,7 +121,7 @@ void DeferredRenderer::Resize(uint32_t width, uint32_t height)
     m_TAAHistoryValid = false;
     m_HasPrevViewProj = false;
     m_TaaFrameIndex   = 0;
-    m_PrevJitter      = glm::vec2(0.0f);   // FIX: сброс при resize
+    m_PrevJitter      = glm::vec2(0.0f);   
 }
 
 void DeferredRenderer::ClearGBuffer()
@@ -184,9 +184,9 @@ void DeferredRenderer::EnsurePostTargets(uint32_t width, uint32_t height)
     }
     else m_LDRFBO->Resize(width, height);
 
-    // FIX: FXAA сэмплирует LDR с билинейной интерполяцией. Раньше фильтр
-    // менялся в ApplyFXAA при каждом вызове (побочный эффект на весь FBO).
-    // Теперь выставляем LINEAR один раз после создания/ресайза.
+    
+    
+    
     glBindTexture(GL_TEXTURE_2D, m_LDRFBO->GetColorAttachment(0));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -300,7 +300,7 @@ void DeferredRenderer::EnsureDrawBuffers(uint32_t drawCount)
                  nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
 
-    // FIX: отдельный SSBO для шаблонов групп (используется culling-шейдером).
+    
     if (m_GroupDataSSBO == 0) glGenBuffers(1, &m_GroupDataSSBO);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_GroupDataSSBO);
     glBufferData(GL_SHADER_STORAGE_BUFFER,
@@ -327,11 +327,11 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
     MaterialLibrary::Get().Flush();
     InstanceBuffer::Get().Upload(frame.Instances);
 
-    const uint32_t groupCount = (uint32_t)frame.Draws.size();   // FIX: работаем в группах
+    const uint32_t groupCount = (uint32_t)frame.Draws.size();   
     const bool gpuCull = m_FrustumCullingEnabled && m_CullShader != nullptr &&
                          !frame.Instances.empty();
 
-    EnsureDrawBuffers(groupCount);   // FIX: буферы под количество групп, не инстансов
+    EnsureDrawBuffers(groupCount);   
 
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_DrawIndirectSSBO);
 
@@ -343,7 +343,7 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
     }
     else
     {
-        // FIX: загружаем шаблоны draw-команд в отдельный SSBO.
+        
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_GroupDataSSBO);
         glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
                         (GLsizeiptr)(groupCount * sizeof(DrawElementsIndirect)),
@@ -388,7 +388,7 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
         glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT,
                                          (void*)0,
                                           0,
-                                         (GLsizei)groupCount,   // FIX
+                                         (GLsizei)groupCount,   
                                          0);
         glBindBuffer(GL_PARAMETER_BUFFER, 0);
     }
@@ -405,8 +405,8 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
     {
         m_FrameStats.GpuCulling       = true;
         m_FrameStats.DrawCalls        = m_LastCullStats.Draws;
-        // FIX: реальное число видимых инстансов из SSBO (раньше ошибочно
-        // приравнивалось к числу draw call'ов).
+        
+        
         m_FrameStats.VisibleInstances = m_LastCullStats.VisibleInstances;
         m_FrameStats.Vertices         = m_LastCullStats.Vertices;
         m_FrameStats.Triangles        = m_LastCullStats.Indices / 3;
@@ -442,7 +442,7 @@ void DeferredRenderer::PrepareCullPass(const glm::mat4& viewMatrix,
 {
     PollCullStats();
 
-    // FIX: 4 uint вместо 3
+    
     static const GLuint kZeroState[4] = { 0u, 0u, 0u, 0u };
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_DrawStateSSBO);
     glClearBufferSubData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, 0,
@@ -457,7 +457,7 @@ void DeferredRenderer::PrepareCullPass(const glm::mat4& viewMatrix,
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, MeshLibrary::Get().GetMeshSSBO());
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_DrawIndirectSSBO);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_DrawStateSSBO);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_GroupDataSSBO);   // FIX
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_GroupDataSSBO);   
 
     const glm::mat4 viewProj  = projectionMatrix * viewMatrix;
     const Frustum   frustum   = Frustum::FromViewProjection(viewProj);
@@ -468,11 +468,11 @@ void DeferredRenderer::PrepareCullPass(const glm::mat4& viewMatrix,
         const std::string name = "u_Frustum[" + std::to_string(i) + "]";
         m_CullShader->SetVec4(name, frustum.Planes[i]);
     }
-    // FIX: dispatch по числу групп, не инстансов
+    
     m_CullShader->SetUInt("u_GroupCount", groupCount);
     m_CullShader->SetUInt("u_MaxDraws",   groupCount);
 
-    // 1 workgroup на 1 группу инстансов (local_size_x = 64 — потоки внутри группы).
+    
     glDispatchCompute(groupCount, 1, 1);
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 
@@ -488,7 +488,7 @@ void DeferredRenderer::PollCullStats()
 
     if (status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED)
     {
-        uint32_t values[4] = { 0u, 0u, 0u, 0u };   // FIX: 4 значения
+        uint32_t values[4] = { 0u, 0u, 0u, 0u };   
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_DrawStateSSBO);
         glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(values), values);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
@@ -496,7 +496,7 @@ void DeferredRenderer::PollCullStats()
         m_LastCullStats.Draws            = values[0];
         m_LastCullStats.Vertices         = values[1];
         m_LastCullStats.Indices          = values[2];
-        m_LastCullStats.VisibleInstances = values[3];   // FIX
+        m_LastCullStats.VisibleInstances = values[3];   
 
         glDeleteSync(m_CullFence);
         m_CullFence = nullptr;
@@ -925,9 +925,9 @@ void DeferredRenderer::ApplyFXAA(uint32_t sourceTexture,
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, sourceTexture);
-    // FIX: убраны glTexParameteri(...) — фильтр LDR-текстуры теперь
-    // выставляется один раз в EnsurePostTargets и не сбивается повторными
-    // вызовами ApplyFXAA.
+    
+    
+    
 
     m_FXAAShader->Bind();
     m_FXAAShader->SetInt  ("u_ColorTexture",     0);

@@ -11,16 +11,16 @@ uniform sampler2D u_MaterialTexture;
 uniform vec3  u_CameraPosition;
 uniform mat4  u_InvViewProj;
 
-// ---- Skybox ----
+
 uniform samplerCube u_EnvironmentMap;
 uniform int   u_HasEnvironment;
-uniform float u_SkyboxRotation;    // radians around Y
+uniform float u_SkyboxRotation;    
 uniform float u_SkyboxBrightness;
 
-// ---- Туман ----
+
 uniform int   u_FogEnabled;
-uniform int   u_FogMode;        // 0 = Linear, 1 = Exponential, 2 = Exponential Squared
-uniform vec3  u_FogColor;       // в sRGB, как задаётся в редакторе
+uniform int   u_FogMode;        
+uniform vec3  u_FogColor;       
 uniform float u_FogDensity;
 uniform float u_FogStart;
 uniform float u_FogEnd;
@@ -41,7 +41,7 @@ uniform int   u_LightCount;
 
 const float PI = 3.14159265359;
 
-// ---------------- BRDF ----------------
+
 
 float D_GGX(float NdotH, float roughness)
 {
@@ -71,7 +71,7 @@ vec3 F_Schlick(float cosTheta, vec3 F0)
 vec3 EvaluateBRDF(vec3 N, vec3 V, vec3 L, vec3 radiance,
                   vec3 albedo, float metallic, float roughness)
 {
-    // Half-vector: защищаемся от NaN, когда V ≈ -L
+    
     vec3 Hv = V + L;
     float hLen = length(Hv);
     if (hLen < 1e-5) return vec3(0.0);
@@ -106,11 +106,11 @@ float PointAttenuation(float dist, float range)
     return cutoff / max(d2, 1e-3);
 }
 
-// ---------------- Skybox ----------------
+
 
 vec3 ComputeRayDirection()
 {
-    // Fullscreen-quad UV → NDC → world ray
+    
     vec4 clip  = vec4(v_UV * 2.0 - 1.0, 1.0, 1.0);
     vec4 world = u_InvViewProj * clip;
     return normalize(world.xyz / world.w - u_CameraPosition);
@@ -118,7 +118,7 @@ vec3 ComputeRayDirection()
 
 vec3 SampleSkybox(vec3 dir)
 {
-    // Rotate around Y axis by u_SkyboxRotation
+    
     float c = cos(u_SkyboxRotation);
     float s = sin(u_SkyboxRotation);
     vec3 rotated = vec3(
@@ -129,7 +129,7 @@ vec3 SampleSkybox(vec3 dir)
     return texture(u_EnvironmentMap, rotated).rgb * u_SkyboxBrightness;
 }
 
-// ---------------- Main ----------------
+
 
 void main()
 {
@@ -145,13 +145,13 @@ void main()
     float roughness = clamp(mat.g, 0.04, 1.0);
     float emissive  = mat.b;
 
-    // .a = enabled ? strength : -1.0  (упаковано в geometry.frag)
+    
     bool  skyReflEnabled  = mat.a >= 0.0;
     float skyReflStrength = max(mat.a, 0.0);
 
-    // ------- Background pixel (no geometry) → skybox -------
-    // ВАЖНО: проверяем ДЛИНУ до normalize, иначе normalize(0) даёт NaN
-    // на части драйверов, и NaN-нормали проваливаются в lit-ветку.
+    
+    
+    
     if (dot(Nraw, Nraw) < 1e-4)
     {
         vec3 color = vec3(0.0);
@@ -162,12 +162,12 @@ void main()
             color = SampleSkybox(dir);
         }
 
-        // HDR: tonemap/гамма вынесены в отдельный проход (tonemap.frag).
+        
         FragColor = vec4(color, 1.0);
         return;
     }
 
-    // ------- Lit pixel -------
+    
     vec3 N = normalize(Nraw);
     vec3 V = normalize(u_CameraPosition - worldPos);
     vec3 Lo = vec3(0.0);
@@ -210,7 +210,7 @@ void main()
         Lo += EvaluateBRDF(N, V, L, radiance, albedo, metallic, roughness);
     }
 
-    // ---- Ambient (hemisphere) ----
+    
     vec3 skyColor    = vec3(0.35, 0.42, 0.55);
     vec3 groundColor = vec3(0.12, 0.10, 0.08);
     float hemi       = N.y * 0.5 + 0.5;
@@ -218,11 +218,11 @@ void main()
 
     if (u_HasEnvironment == 1)
     {
-        // Мягкий диффузный tint от неба (низкочастотный)
+        
         vec3 skyN = SampleSkybox(N);
         ambient += skyN * albedo * ao * 0.15;
 
-        // ---- Зеркальное отражение неба (прямой сэмпл кубемапы) ----
+        
         if (skyReflEnabled)
         {
             vec3 R    = reflect(-V, N);
@@ -240,9 +240,9 @@ void main()
 
     vec3 color = ambient + Lo + albedo * emissive;
 
-    // ---- Туман ----
-    // Считается по расстоянию до камеры; небо (ветка выше) не затуманивается,
-    // чтобы кубемапа оставалась видимой.
+    
+    
+    
     if (u_FogEnabled == 1)
     {
         const float dist = length(u_CameraPosition - worldPos);
@@ -263,12 +263,12 @@ void main()
             fog = 1.0 - exp(-d * d);
         }
 
-        // Цвет тумана задан в sRGB — переводим в линейное пространство сцены.
+        
         const vec3 fogLinear = pow(max(u_FogColor, vec3(0.0)), vec3(2.2));
         color = mix(color, fogLinear, clamp(fog, 0.0, 1.0));
     }
 
-    // HDR: линейный цвет уходит в RGBA16F и тонамапится отдельным проходом
-    // уже после TAA (tonemap.frag).
+    
+    
     FragColor = vec4(color, 1.0);
 }

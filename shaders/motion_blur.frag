@@ -1,15 +1,15 @@
 #version 460 core
 
-// ---------------------------------------------------------------------------
-// Motion blur по velocity-буферу.
-//
-// Velocity в G-buffer содержит и движение объектов, и субпиксельный джиттер
-// TAA. Джиттер вычитается как константа (u_JitterDelta), иначе статичная
-// сцена «размазывалась» бы из-за сглаживания.
-//
-// Выборки вдоль вектора движения; глубина отсекает фон, чтобы он не затекал
-// на передний план (и наоборот).
-// ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
 
 in  vec2 v_UV;
 out vec4 FragColor;
@@ -18,7 +18,7 @@ uniform sampler2D u_HDRTexture;
 uniform sampler2D u_VelocityTexture;
 uniform sampler2D u_DepthTexture;
 
-uniform vec2  u_JitterDelta;   // (prevJitter - jitter) * 0.5, в UV
+uniform vec2  u_JitterDelta;   
 uniform float u_Strength;
 uniform int   u_Samples;
 uniform float u_NearPlane;
@@ -40,14 +40,14 @@ void main()
     const vec2 res = vec2(textureSize(u_HDRTexture, 0));
     const float lenPx = length(vel * res);
 
-    // Меньше половины пикселя — движение незаметно, не тратим выборки.
+    
     if (lenPx < 0.5)
     {
         FragColor = vec4(center, 1.0);
         return;
     }
 
-    // Ограничение длины: резкий поворот камеры не должен давать полосы.
+    
     const float kMaxPixels = 32.0;
     if (lenPx > kMaxPixels)
         vel *= kMaxPixels / lenPx;
@@ -60,7 +60,7 @@ void main()
     const int samples = clamp(u_Samples, 2, 16);
     for (int i = 1; i < samples; ++i)
     {
-        const float t = float(i) / float(samples - 1) - 0.5;   // -0.5..0.5
+        const float t = float(i) / float(samples - 1) - 0.5;   
         const vec2 suv = v_UV + vel * t;
 
         if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0))))
@@ -68,7 +68,7 @@ void main()
 
         const float zs = LinearDepth(texture(u_DepthTexture, suv).r);
         if (abs(zs - zc) > 0.1 * zc)
-            continue;   // другая поверхность — не подмешиваем
+            continue;   
 
         sum  += texture(u_HDRTexture, suv).rgb;
         wsum += 1.0;

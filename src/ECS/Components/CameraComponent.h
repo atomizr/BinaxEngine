@@ -25,9 +25,9 @@ struct CameraComponent
     float FXAAEdgeThresholdMin = 0.0312f;
     float FXAASubpixelBlending = 1.0f;
 
-    // NEW: TAA
+    
     bool  TAAEnabled       = false;
     float TAAHistoryWeight = 0.90f;
 };
 
-} // namespace Binax
+} 

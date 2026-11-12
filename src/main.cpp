@@ -103,9 +103,9 @@ Binax::PostProcessSettings GatherPostProcessSettings(entt::registry& registry)
 {
     Binax::PostProcessSettings s;
 
-    // FIX: дефолтный tonemap — Linear (просто clamp), а не ACES.
-    // Раньше при post.Enabled == false ACES всё равно применялся, потому что
-    // ApplyTonemap вызывается всегда, а TonemapMode по умолчанию был 0 (ACES).
+    
+    
+    
     s.TonemapMode = static_cast<int>(Binax::TonemapMode::Linear);
 
     auto view = registry.view<Binax::PostProcessComponent>();
@@ -113,7 +113,7 @@ Binax::PostProcessSettings GatherPostProcessSettings(entt::registry& registry)
     {
         const auto& c = view.get<Binax::PostProcessComponent>(e);
         if (!c.Enabled)
-            return s;   // Linear tonemap + дефолтные громкости → passthrough-ish
+            return s;   
 
         s.Enabled  = true;
         s.Exposure = c.Exposure;

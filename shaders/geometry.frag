@@ -16,7 +16,7 @@ flat in uint v_InstanceIndex;
 struct InstanceGPU {
     mat4 Model;
     mat4 PrevModel;
-    mat4 NormalMatrix;   // FIX: должна совпадать с geometry.vert и C++
+    mat4 NormalMatrix;   
     uint MaterialId;
     uint MeshId;
     uint BoneOffset;
