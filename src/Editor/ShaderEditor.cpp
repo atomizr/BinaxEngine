@@ -6,7 +6,7 @@
 #include <sstream>
 
 #include <imgui.h>
-#include <imgui_internal.h>    // ImHashStr
+#include <imgui_internal.h>
 
 #include "Renderer/im_anim.h"
 #include "Utils/Log.h"
@@ -61,7 +61,7 @@ void ShaderEditor::OpenFile(const std::string& path)
         if (m_Open[i].Path == path)
         {
             m_ActiveTab = (int)i;
-            m_Open[i].NeedsSelect = true;   // <-- форсим переключение
+            m_Open[i].NeedsSelect = true;
             m_Visible = true;
             return;
         }
@@ -70,7 +70,7 @@ void ShaderEditor::OpenFile(const std::string& path)
     OpenShader s;
     s.Path = path;
     s.Name = Paths::ToUtf8(Paths::FromUtf8(path).filename());
-    s.NeedsSelect = true;                   // <-- форсим активацию новой вкладки
+    s.NeedsSelect = true;
 
     s.Editor.SetLanguageDefinition(TextEditor::LanguageDefinition::GLSL());
     s.Editor.SetPalette(TextEditor::GetDarkPalette());
@@ -173,7 +173,7 @@ void ShaderEditor::Draw()
         0.25f, iam_ease_preset(iam_ease_out_cubic),
         iam_policy_crossfade, dt);
 
-    // Не рисуем окно, если оно ещё почти невидимо
+
     if (anim < 0.01f)
         return;
 
@@ -253,8 +253,8 @@ void ShaderEditor::DrawEditorTabs()
 
     if (!ImGui::BeginTabBar("##shadertabs", ImGuiTabBarFlags_Reorderable))
     {
-        // На первом кадре после BeginTabBar ImGui может вернуть false.
-        // Просто пропускаем кадр, вкладки появятся со следующего.
+
+
         return;
     }
 
@@ -274,13 +274,13 @@ void ShaderEditor::DrawEditorTabs()
         if (ImGui::BeginTabItem(label.c_str(), &wantClose, flags))
         {
             anyTabDrawn = true;
-            s.NeedsSelect = false;      // флаг израсходован
+            s.NeedsSelect = false;
             m_ActiveTab = i;
 
             ImGui::TextDisabled("%s", s.Path.c_str());
             ImGui::Separator();
 
-            // Гарантируем ненулевой размер, иначе TextEditor не отрисуется
+
             ImVec2 avail = ImGui::GetContentRegionAvail();
             if (avail.x < 100.0f) avail.x = 400.0f;
             if (avail.y < 100.0f) avail.y = 300.0f;
@@ -303,8 +303,8 @@ void ShaderEditor::DrawEditorTabs()
         }
     }
 
-    // Fallback: если ImGui почему-то не выбрал ни одну вкладку — 
-    // принудительно рисуем активную, чтобы пользователь точно увидел код.
+
+
     if (!anyTabDrawn && m_ActiveTab >= 0 && m_ActiveTab < (int)m_Open.size())
     {
         OpenShader& s = m_Open[m_ActiveTab];
@@ -321,4 +321,4 @@ void ShaderEditor::DrawEditorTabs()
     ImGui::EndTabBar();
 }
 
-} // namespace Binax
+} 

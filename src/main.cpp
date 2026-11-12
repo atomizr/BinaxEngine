@@ -332,18 +332,18 @@ int main()
         Binax::EditorUI editorUI(window.GetGLFWWindow(), registry);
         editorUI.SetViewport(&viewport);
 
-        // Редактор шейдеров: при сохранении файла просим рендерер перечитать шейдеры
-        // === Object picking: нужен frameData — объявляем заранее ===
-        Binax::FrameRenderData frameData;   // <-- ПЕРЕНЕСЕНО СЮДА
 
-        // Редактор шейдеров: при сохранении файла просим рендерер перечитать шейдеры
+
+        Binax::FrameRenderData frameData;
+
+
         editorUI.GetShaderEditor().SetReloadCallback(
-            [&renderer](const std::string& /*path*/)
+            [&renderer](const std::string& )
             {
                 renderer.ReloadShaders();
             });
 
-        // === Object picking: LMB-клик в viewport → выделение объекта ===
+
         editorUI.SetPickCallback(
             [&](ImVec2 uv) -> entt::entity
             {
@@ -356,14 +356,14 @@ int main()
         bool vsyncEnabled = props.VSync;
         float smoothedFps = 0.0f;
 
-        // ============================================================
-        // Stats-панель: анимированный FPS + график + бюджет кадра.
-        //
-        // Когда включён overlay-режим (кнопка Stats во Viewport),
-        // окно приковывается к правому верхнему углу viewport КАЖДЫЙ
-        // кадр и принудительно поднимается на верхний z-слой через
-        // BringWindowToDisplayFront — не забирая фокус у вьюпорта.
-        // ============================================================
+
+
+
+
+
+
+
+
         editorUI.AddPanelDrawer([&]()
         {
             const bool wantOverlay =
@@ -373,13 +373,13 @@ int main()
             {
                 const ImVec4 r = editorUI.GetViewportScreenRect();
 
-                // Позиция пересчитывается каждый кадр → Stats следует за
-                // viewport'ом при ресайзе и не «отвязывается».
+
+
                 ImGui::SetNextWindowPos(
                     ImVec2(r.x + r.z - 290.0f, r.y + 8.0f),
                     ImGuiCond_Always);
 
-                // Полупрозрачность для эффекта overlay.
+
                 ImGui::SetNextWindowBgAlpha(0.92f);
             }
 
@@ -391,8 +391,8 @@ int main()
 
             if (wantOverlay)
             {
-                // Принудительно на верхний слой — но БЕЗ фокуса,
-                // чтобы не красть ввод у viewport'а.
+
+
                 ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
             }
 
@@ -404,7 +404,7 @@ int main()
                               ? instFps
                               : smoothedFps * 0.9f + instFps * 0.1f;
 
-            // Плавный FPS через ImAnim
+
             const float displayFps = iam_tween_float(
                 ImGui::GetID("fps_display"),
                 ImHashStr("v"),
@@ -417,7 +417,7 @@ int main()
             ImGui::Text("FPS:        %.1f", displayFps);
             ImGui::Text("Frame time: %.2f ms", ms);
 
-            // Мини-график FPS
+
             static float fpsHistory[60] = {};
             static int   fpsOffset = 0;
             fpsHistory[fpsOffset] = smoothedFps;
@@ -425,7 +425,7 @@ int main()
             ImGui::PlotLines("##fps", fpsHistory, IM_ARRAYSIZE(fpsHistory), fpsOffset,
                              nullptr, 0.0f, 240.0f, ImVec2(-1, 40));
 
-            // Бюджет кадра 16.6 ms (60 FPS)
+
             const float frameBudget = 16.6f;
             const float currentMs = 1000.0f / std::max(1.0f, smoothedFps);
             const float budget = std::clamp(currentMs / frameBudget, 0.0f, 1.0f);
@@ -471,7 +471,7 @@ int main()
 
             ImGui::End();
 
-            // Пользователь закрыл окно крестиком — выключаем overlay
+
             if (!open)
                 editorUI.SetViewportStatsVisible(false);
         });
@@ -480,18 +480,18 @@ int main()
         collectedLights.reserve(Binax::kMaxLights);
         glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
 
-        // ============================================================
-        // ОСНОВНОЙ ЦИКЛ — с iam_update_begin_frame / iam_clip_update
-        // ============================================================
+
+
+
         while (!window.ShouldClose())
         {
             timer.Update();
             float delta = timer.GetDelta();
 
-            // === ImAnim: обновление ДО всех tween/clip вызовов ===
+
             iam_update_begin_frame();
             iam_clip_update(delta);
-            // =======================================================
+
 
             Binax::Input::Update();
             window.Update();
@@ -586,7 +586,7 @@ int main()
                           editorCamera.GetViewMatrix(),
                           editorCamera.GetProjectionMatrix());
 
-    // === Outline выделенного объекта ===
+
     {
         const auto& selSet = editorUI.GetSelectedEntities();
         std::vector<entt::entity> selVec(selSet.begin(), selSet.end());
@@ -598,7 +598,7 @@ int main()
             (uint32_t)viewport.GetSize().x,
             (uint32_t)viewport.GetSize().y);
     }
-    // ===================================
+
 
     collectedLights.clear();
             Binax::RenderSystem::CollectLights(registry, collectedLights);
@@ -627,14 +627,14 @@ int main()
 
             editorUI.Draw();
 
-            // === ImAnim: периодический GC ===
+
             static float animGcTimer = 0.0f;
             if ((animGcTimer += delta) > 1.0f) {
                 iam_gc(600);
                 iam_clip_gc(600);
                 animGcTimer = 0.0f;
             }
-            // =================================
+
 
             window.SwapBuffers();
         }

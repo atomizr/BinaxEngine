@@ -16,7 +16,7 @@ public:
 
     static bool Deserialize(entt::registry& registry, const std::string& filepath);
 
-    // === Undo/Redo: сериализация в память ===
+
     static std::string SerializeToString(entt::registry& registry);
     static bool DeserializeFromString(entt::registry& registry,
                                       const std::string& json_string);

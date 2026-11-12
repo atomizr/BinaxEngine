@@ -37,7 +37,7 @@ void Log::Init()
         std::fprintf(stderr, "BINAX log: file sink init failed: %s\n", ex.what());
     }
 
-    // === НОВОЕ: sink для встроенной консоли редактора ===
+
     sinks.push_back(Binax::LogSink::Instance());
 
     s_CoreLogger = std::make_shared<spdlog::logger>(

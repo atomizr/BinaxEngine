@@ -17,7 +17,7 @@ private:
     bool m_Visible      = true;
     bool m_AutoScroll   = true;
     char m_Filter[128]  = {};
-    int  m_MinLevel     = 0;  // 0=Trace .. 5=Critical
+    int  m_MinLevel     = 0;
 };
 
-} // namespace Binax
+} 

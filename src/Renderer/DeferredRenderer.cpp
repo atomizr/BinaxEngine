@@ -247,7 +247,7 @@ void DeferredRenderer::EnsurePostTargets(uint32_t width, uint32_t height)
         m_HasPrevViewProj = false;
         m_TaaFrameIndex   = 0;
     }
-        // === Outline FBO ===
+
     if (!m_OutlineFBO)
     {
         m_OutlineFBO = std::make_unique<Framebuffer>(width, height);
@@ -591,7 +591,7 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
     m_LightingShader->SetInt("u_NormalTexture",   1);
     m_LightingShader->SetInt("u_AlbedoTexture",   2);
     m_LightingShader->SetInt("u_MaterialTexture", 3);
-        // Outline texture — слот 5 (4 уже занят cubemap'ом)
+
     if (m_HasOutline && m_OutlineFBO)
     {
         glActiveTexture(GL_TEXTURE0 + 5);
@@ -975,9 +975,9 @@ void DeferredRenderer::ApplyFXAA(uint32_t sourceTexture,
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-// ============================================================
-// Outline pass — выделение выбранного объекта
-// ============================================================
+
+
+
 void DeferredRenderer::RenderOutlinePass(const FrameRenderData& frame,
                                          const std::vector<entt::entity>& selectedEntities,
                                          const glm::mat4& viewMatrix,
@@ -1019,13 +1019,13 @@ void DeferredRenderer::RenderOutlinePass(const FrameRenderData& frame,
 
     MeshLibrary::Get().BindVAO();
 
-    // Рисуем маску ВСЕХ выделенных в один FBO — общая граница группы
+
     bool anyDrawn = false;
     for (entt::entity sel : selectedEntities)
     {
         if (sel == entt::null) continue;
 
-        // Ищем instance этого entity
+
         int selectedIdx = -1;
         for (size_t i = 0; i < frame.InstanceEntities.size(); ++i)
         {

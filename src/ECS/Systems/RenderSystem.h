@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-#include <glad/glad.h>                    // <-- ДОБАВИТЬ (glReadPixels и др.)
+#include <glad/glad.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
@@ -180,12 +180,12 @@ public:
         }
     }
 
-    // ============================================================
-    // Object picking
-    // Читает world position из G-Buffer по UV в [0,1] (Y-down, как ImGui),
-    // ищет instance, чей локальный AABB содержит эту точку.
-    // Возвращает entt::null если клик ушёл в небо или мимо объекта.
-    // ============================================================
+
+
+
+
+
+
     static entt::entity PickEntityAtUV(const FrameRenderData& frame,
                                        const GBuffer& gbuffer,
                                        float u, float v)
@@ -208,19 +208,19 @@ public:
 
         float worldPos[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
-        // Сохраняем текущий READ_FRAMEBUFFER, чтобы не сломать внешний код.
+
         GLint prevReadFBO = 0;
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, gbuffer.GetFramebufferID());
-        glReadBuffer(GL_COLOR_ATTACHMENT0);   // POSITION = attachment 0
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
         glReadPixels(px, py, 1, 1, GL_RGBA, GL_FLOAT, worldPos);
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevReadFBO);
 
         const glm::vec3 p(worldPos[0], worldPos[1], worldPos[2]);
 
-        // Небо = (0,0,0) — G-Buffer очищается в чёрный.
+
         if (p.x == 0.0f && p.y == 0.0f && p.z == 0.0f)
             return entt::null;
 
@@ -235,11 +235,11 @@ public:
 
             const MeshGPU& mesh = MeshLibrary::Get().Get(inst.MeshId);
 
-            // Точку из world в локальное пространство instance
+
             const glm::mat4 invModel = glm::inverse(inst.Model);
             const glm::vec3 lp = glm::vec3(invModel * glm::vec4(p, 1.0f));
 
-            // Эпсилон 0.5% от размера AABB — компенсирует float-ошибки
+
             const glm::vec3 ext = (mesh.AABBMax - mesh.AABBMin) * 0.005f;
 
             if (lp.x >= mesh.AABBMin.x - ext.x && lp.x <= mesh.AABBMax.x + ext.x &&
@@ -254,4 +254,4 @@ public:
     }
 };
 
-} // namespace Binax
+} 

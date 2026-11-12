@@ -47,7 +47,7 @@ std::string ToLower(const std::string& s)
     return out;
 }
 
-} // namespace
+}
 
 void Console::Draw()
 {
@@ -60,7 +60,7 @@ void Console::Draw()
         return;
     }
 
-    // === Тулбар ===
+
     if (ImGui::Button("Clear"))
         LogSink::Instance()->Clear();
 
@@ -78,7 +78,7 @@ void Console::Draw()
 
     ImGui::Separator();
 
-    // === Лог-область ===
+
     const float footer = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
 
     if (ImGui::BeginChild("##log", ImVec2(0, -footer), false,
@@ -111,4 +111,4 @@ void Console::Draw()
     ImGui::End();
 }
 
-} // namespace Binax
+} 

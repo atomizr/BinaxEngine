@@ -25,9 +25,9 @@ namespace Binax
 
 using namespace Serialization::Json;
 
-// ---------------------------------------------------------------------------
-// Валидация структуры JSON-файла сцены
-// ---------------------------------------------------------------------------
+
+
+
 static bool ValidateSceneJson(const nlohmann::json& root)
 {
     if (!root.is_object())
@@ -50,9 +50,9 @@ static bool ValidateSceneJson(const nlohmann::json& root)
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Serialize
-// ---------------------------------------------------------------------------
+
+
+
 void SceneSerializer::Serialize(entt::registry& registry, const std::string& filepath)
 {
     const std::string json = SerializeToString(registry);
@@ -75,7 +75,7 @@ void SceneSerializer::Serialize(entt::registry& registry, const std::string& fil
         return;
     }
 
-    // Считаем не-system сущности только для лога
+
     size_t entityCount = 0;
     for (auto e : registry.storage<entt::entity>())
         if (!registry.any_of<SystemEntityTag>(e))
@@ -86,9 +86,9 @@ void SceneSerializer::Serialize(entt::registry& registry, const std::string& fil
                    MaterialLibrary::Get().GetMaterialCount());
 }
 
-// ---------------------------------------------------------------------------
-// SerializeToString — используется и для Save, и для Undo/Redo snapshot
-// ---------------------------------------------------------------------------
+
+
+
 std::string SceneSerializer::SerializeToString(entt::registry& registry)
 {
     nlohmann::json root;
@@ -127,9 +127,9 @@ std::string SceneSerializer::SerializeToString(entt::registry& registry)
     return root.dump();
 }
 
-// ---------------------------------------------------------------------------
-// Deserialize — читает файл и делегирует в DeserializeFromString
-// ---------------------------------------------------------------------------
+
+
+
 bool SceneSerializer::Deserialize(entt::registry& registry, const std::string& filepath)
 {
     std::ifstream file(Paths::FromUtf8(filepath));
@@ -146,9 +146,9 @@ bool SceneSerializer::Deserialize(entt::registry& registry, const std::string& f
     return DeserializeFromString(registry, ss.str());
 }
 
-// ---------------------------------------------------------------------------
-// DeserializeFromString — используется и для Load, и для Undo/Redo
-// ---------------------------------------------------------------------------
+
+
+
 bool SceneSerializer::DeserializeFromString(entt::registry& registry,
                                             const std::string& json_string)
 {
@@ -179,7 +179,7 @@ bool SceneSerializer::DeserializeFromString(entt::registry& registry,
         return false;
     }
 
-    // Удаляем все не-system сущности (system выживают)
+
     std::vector<entt::entity> toDestroy;
     for (auto e : registry.storage<entt::entity>())
     {
@@ -222,7 +222,7 @@ bool SceneSerializer::DeserializeFromString(entt::registry& registry,
         return false;
     }
 
-    // Восстанавливаем родителей
+
     for (auto& [entity, entityJson] : created)
     {
         const int parentId = Int(*entityJson, "parent", -1);
@@ -240,9 +240,9 @@ bool SceneSerializer::DeserializeFromString(entt::registry& registry,
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// SerializeEntity — без изменений
-// ---------------------------------------------------------------------------
+
+
+
 void SceneSerializer::SerializeEntity(entt::registry& registry,
                                       entt::entity entity,
                                       nlohmann::json& outJson)
@@ -268,9 +268,9 @@ void SceneSerializer::SerializeEntity(entt::registry& registry,
     }
 }
 
-// ---------------------------------------------------------------------------
-// ApplyEntityData — без изменений
-// ---------------------------------------------------------------------------
+
+
+
 void SceneSerializer::ApplyEntityData(entt::registry& registry,
                                       entt::entity entity,
                                       const nlohmann::json& json)
@@ -316,4 +316,4 @@ void SceneSerializer::ApplyEntityData(entt::registry& registry,
     }
 }
 
-} // namespace Binax
+} 

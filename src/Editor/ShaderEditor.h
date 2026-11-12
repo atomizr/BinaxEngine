@@ -14,7 +14,7 @@ class ShaderEditor
 public:
     ShaderEditor();
 
-    // Колбэк при сохранении/reload файла — обычно вызывает renderer.ReloadShaders()
+
     void SetReloadCallback(std::function<void(const std::string&)> cb)
     {
         m_ReloadCallback = std::move(cb);
@@ -24,10 +24,10 @@ public:
     bool IsVisible() const  { return m_Visible; }
     void ToggleVisible()    { m_Visible = !m_Visible; }
 
-    // Открыть файл в новой вкладке (или переключиться на существующую)
+
     void OpenFile(const std::string& path);
 
-    // Рисует окно. Вызывать каждый кадр.
+
     void Draw();
 
 private:
@@ -62,4 +62,4 @@ private:
     ImVec2 m_WindowSize{900.0f, 560.0f};
 };
 
-} // namespace Binax
+} 

@@ -15,9 +15,9 @@
 #include "Renderer/MaterialLibrary.h"
 #include "Renderer/MeshLibrary.h"
 
-// ВАЖНО: "imgui_notify.h" здесь НЕ подключаем.
-// Он требует <imgui.h> до себя, а он будет подключён в .cpp.
-// ImGuiToastType — это typedef int, поэтому в объявлении используем int.
+
+
+
 
 struct GLFWwindow;
 
@@ -48,7 +48,7 @@ public:
     bool IsGizmoUsing() const;
     bool IsGizmoHovered() const;
 
-    // Всплывающие уведомления. ImGuiToastType = int.
+
     void Notify(int type, int dismissMs, const char* format = nullptr, ...);
 
     Console& GetConsole() { return m_Console; }
@@ -65,17 +65,17 @@ public:
                       m_ViewportScreenW, m_ViewportScreenH);
     }
 
-    // === Undo / Redo ===
+
     bool CanUndo() const { return m_UndoCursor > 0; }
     bool CanRedo() const { return m_UndoCursor + 1 < (int)m_UndoStates.size(); }
     void Undo();
     void Redo();
 
-    // === Object picking (single callback) ===
+
     using PickCallback = std::function<entt::entity(ImVec2 uv)>;
     void SetPickCallback(PickCallback cb) { m_PickCallback = std::move(cb); }
 
-    // === Selection ===
+
     entt::entity GetSelectedEntity() const { return m_SelectedEntity; }
 
     const std::unordered_set<entt::entity>& GetSelectedEntities() const
@@ -86,7 +86,7 @@ public:
 private:
     entt::registry& m_Registry;
 
-    // Selection (единственное объявление)
+
     entt::entity                     m_SelectedEntity = entt::null;
     std::unordered_set<entt::entity> m_SelectedEntities;
 
@@ -130,14 +130,14 @@ private:
 
     PickCallback m_PickCallback;
 
-    // Undo/Redo state
+
     std::vector<std::string> m_UndoStates;
     int  m_UndoCursor          = -1;
     bool m_UndoSuppress        = false;
     bool m_GizmoWasUsing       = false;
     bool m_InspectorPendingRec = false;
 
-    // ---- Panel drawing ----
+
     void DrawHierarchy();
     void DrawInspector();
     void DrawViewport();
@@ -150,17 +150,17 @@ private:
                        const std::unordered_map<entt::entity, std::vector<entt::entity>>& children,
                        std::unordered_set<entt::entity>& visited);
 
-    // ---- Selection helpers ----
+
     void SelectOnly(entt::entity e);
     void ToggleSelect(entt::entity e);
     void ClearSelection();
 
-    // ---- Hierarchy ----
+
     void SetParent(entt::entity child, entt::entity parent);
     bool IsDescendantOf(entt::entity candidate, entt::entity ancestor) const;
     std::vector<entt::entity> CollectSubtree(entt::entity root) const;
 
-    // ---- Misc helpers ----
+
     float& SnapStep();
     void FocusOnSelection();
     std::string MakeUniqueName(const std::string& sourceName) const;
@@ -191,7 +191,7 @@ private:
     void ViewportFocusGlow();
     void DrawAnimatedHeader(const char* label, bool* open = nullptr);
 
-    // Undo helpers
+
     void ResetUndo();
     void RecordUndo();
     std::string CaptureScene() const;

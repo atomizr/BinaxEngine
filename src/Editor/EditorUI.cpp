@@ -90,7 +90,7 @@ EditorUI::EditorUI(GLFWwindow* window, entt::registry& registry)
 
     InitComponentFactory();
 
-    ResetUndo();   // <-- ДОБАВИТЬ: стартовый snapshot
+    ResetUndo();
 }
 
 EditorUI::~EditorUI()
@@ -142,7 +142,7 @@ void EditorUI::AddComponentToEntity(entt::entity entity, const std::string& comp
     BINAX_LOG_INFO("Added '{}' to entity {}", componentName, (uint32_t)entity);
     Notify(ImGuiToastType_Success, 2000, "Added '%s'", componentName.c_str());
 
-    RecordUndo();   // <-- ДОБАВИТЬ
+    RecordUndo();
 }
 
 void EditorUI::RemoveComponentFromEntity(entt::entity entity, const std::string& componentName)
@@ -177,7 +177,7 @@ void EditorUI::RemoveComponentFromEntity(entt::entity entity, const std::string&
     BINAX_LOG_INFO("Removed '{}' from entity {}", componentName, (uint32_t)entity);
     Notify(ImGuiToastType_Info, 2000, "Removed '%s'", componentName.c_str());
 
-    RecordUndo();   // <-- ДОБАВИТЬ
+    RecordUndo();
 }
 
 
@@ -193,7 +193,7 @@ void EditorUI::SaveScene()
     SceneSerializer::Serialize(m_Registry, levelPath);
     PostProcessSerializer::Save(m_Registry, ppPath);
 
-    // === НОВОЕ ===
+
     Notify(ImGuiToastType_Success, 3000, "Scene saved");
 }
 
@@ -254,7 +254,7 @@ void EditorUI::LoadScene()
 
     BINAX_LOG_INFO("Level loaded");
 
-    ResetUndo();   // <-- ДОБАВИТЬ: новая сцена = новая история
+    ResetUndo();
     Notify(ImGuiToastType_Success, 3000, "Level loaded");
 }
 
@@ -309,7 +309,7 @@ void EditorUI::DeleteEntity(entt::entity entity)
                    (uint32_t)entity, destroyed);
     Notify(ImGuiToastType_Info, 2500, "Deleted '%s'", name.c_str());
 
-    RecordUndo();   // <-- ДОБАВИТЬ
+    RecordUndo();
 }
 
 bool EditorUI::IsDescendantOf(entt::entity candidate, entt::entity ancestor) const
@@ -398,7 +398,7 @@ void EditorUI::SetParent(entt::entity child, entt::entity parent)
                    (parent == entt::null) ? std::string("<root>") : GetEntityName(parent));
     Notify(ImGuiToastType_Info, 2000, "Reparented");
 
-    RecordUndo();   // <-- ДОБАВИТЬ
+    RecordUndo();
 }
 
 bool EditorUI::IsEditorCamera(entt::entity entity) const
@@ -455,10 +455,10 @@ void EditorUI::HandleShortcuts()
     {
         FocusOnSelection();
     }
-        // F4 — открыть/закрыть Shader Editor
+
     if (Input::IsKeyJustPressed(GLFW_KEY_F4))
         m_ShaderEditor.ToggleVisible();
-        // ` (grave) — открыть/закрыть консоль
+
     if (Input::IsKeyJustPressed(GLFW_KEY_GRAVE_ACCENT))
         m_Console.ToggleVisible();
     const bool shift = Input::IsKeyPressed(GLFW_KEY_LEFT_SHIFT) ||
@@ -637,7 +637,7 @@ void EditorUI::Draw()
     m_ShaderEditor.Draw();
     m_Console.Draw(); 
 
-    // === НОВОЕ: рисуем всплывающие уведомления (правый нижний угол) ===
+
     ImGui::RenderNotifications();
 
     ImGui::Render();
@@ -656,7 +656,7 @@ void EditorUI::Notify(int type, int dismissMs, const char* format, ...)
         va_end(args);
     }
 
-    // ImGuiToastType — это typedef int, поэтому cast не нужен, но для ясности:
+
     const ImGuiToastType toastType = static_cast<ImGuiToastType>(type);
 
     if (buffer[0] != '\0')
@@ -695,7 +695,7 @@ void EditorUI::DrawViewport()
 
     if (ImGui::Begin("Viewport", nullptr, flags))
     {
-        // === Тулбар: анимированные иконки ===
+
         if (AnimatedIconButton("M", "Move (W)",  m_GizmoOperation == 0))
             m_GizmoOperation = 0;
         ImGui::SameLine();
@@ -740,7 +740,7 @@ void EditorUI::DrawViewport()
             ImGui::SameLine();
             ImGui::TextDisabled(rotation ? "deg" : (m_GizmoOperation == 2 ? "x" : "units"));
         }
-                // === Кнопка Stats в правом углу тулбара ===
+
         const float statsBtnW = 64.0f;
         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - statsBtnW);
         if (AnimatedIconButton("Stats##vp", "Toggle Stats Overlay",
@@ -778,16 +778,16 @@ void EditorUI::DrawViewport()
 
         ImGui::Dummy(vpSize);
 
-        // === Анимированная подсветка viewport ===
+
         ViewportFocusGlow();
-        // ======================================
+
 
         if (m_ViewportHovered || ImGuizmo::IsUsing())
             DrawGizmo();
 
-        // === Object picking ===
-        // Делаем ПОСЛЕ DrawGizmo, чтобы ImGuizmo::IsOver() был актуален
-        // (он пересчитывается внутри ImGuizmo::Manipulate каждый кадр).
+
+
+
         if (m_PickCallback &&
             m_ViewportHovered &&
             !ImGuizmo::IsOver() &&
@@ -799,7 +799,7 @@ void EditorUI::DrawViewport()
             const ImVec2 mouse = ImGui::GetIO().MousePos;
             const ImVec2 uv(
                 (mouse.x - vpPos.x) / vpSize.x,
-                1.0f - (mouse.y - vpPos.y) / vpSize.y);  // GL Y перевёрнут
+                1.0f - (mouse.y - vpPos.y) / vpSize.y);
 
             if (uv.x >= 0.0f && uv.x <= 1.0f &&
                 uv.y >= 0.0f && uv.y <= 1.0f)
@@ -807,9 +807,9 @@ void EditorUI::DrawViewport()
                 const entt::entity picked = m_PickCallback(uv);
 
                 if (ImGui::GetIO().KeyShift)
-                    ToggleSelect(picked);       // Shift+Click → toggle в наборе
+                    ToggleSelect(picked);
                 else
-                    SelectOnly(picked);         // обычный клик → заменить набор
+                    SelectOnly(picked);
             }
         }
     }
@@ -968,7 +968,7 @@ void EditorUI::DrawGizmo()
         transform.Scale    = scale;
     }
 
-    // === Отслеживание конца перетаскивания гизмо для Undo ===
+
     if (gizmoUsing)
     {
         m_GizmoWasUsing = true;
@@ -1003,7 +1003,7 @@ void EditorUI::DrawHierarchy()
     ImGui::SameLine();
     if (AnimatedButton("+ New", ImVec2(80, 28), true)) CreateCubeEntity();
 
-    // === Undo / Redo кнопки ===
+
     ImGui::SameLine();
     ImGui::BeginDisabled(!CanUndo());
     if (AnimatedButton("Undo", ImVec2(64, 28), false)) Undo();
@@ -1298,8 +1298,8 @@ void EditorUI::DrawInspector()
     if (!isCamera && !isSkybox)
         DrawAddComponentMenu();
 
-    // === Отложенная запись Undo: как только пользователь отпустил
-    //     активный слайдер / drag / input — сохраняем состояние сцены. ===
+
+
     if (m_InspectorPendingRec && !ImGui::IsAnyItemActive())
     {
         m_InspectorPendingRec = false;
@@ -1347,7 +1347,7 @@ void EditorUI::DrawMaterialEditor()
     const float dt = ImGui::GetIO().DeltaTime;
     const ImGuiID open_id = ImHashStr("mat_editor_open");
 
-    // Плавное появление: 0 → 1 за 0.25s
+
     const float anim = iam_tween_float(open_id, ImHashStr("open"),
         m_ShowMaterialEditor ? 1.0f : 0.0f,
         0.25f, iam_ease_preset(iam_ease_out_cubic),
@@ -1358,7 +1358,7 @@ void EditorUI::DrawMaterialEditor()
 
     ImGui::SetNextWindowSize(ImVec2(480, 620), ImGuiCond_FirstUseEver);
 
-    // Slide-in из правого края
+
     ImVec2 display = ImGui::GetIO().DisplaySize;
     ImVec2 base_pos(display.x - 500.0f, 40.0f);
     ImVec2 pos(base_pos.x + (1.0f - anim) * 60.0f, base_pos.y);
@@ -1481,7 +1481,7 @@ void EditorUI::CreateEmptyEntity()
     BINAX_LOG_INFO("Created empty entity {0}", (uint32_t)entity);
     Notify(ImGuiToastType_Info, 2000, "Empty entity created");
 
-    RecordUndo();   // <-- ДОБАВИТЬ
+    RecordUndo();
 }
 
 void EditorUI::CreateCubeEntity()
@@ -1548,7 +1548,7 @@ void EditorUI::CreateCubeEntity()
                    (uint32_t)entity, offsetX, offsetZ);
     Notify(ImGuiToastType_Success, 2000, "Cube created");
 
-    RecordUndo();   // <-- ДОБАВИТЬ
+    RecordUndo();
 }
 
 entt::entity EditorUI::DuplicateSingle(entt::entity src)
@@ -1664,7 +1664,7 @@ void EditorUI::DuplicateEntity(entt::entity entity)
                    GetEntityName(entity), remap.size());
     Notify(ImGuiToastType_Success, 2000, "Duplicated '%s'", GetEntityName(entity).c_str());
 
-    RecordUndo();   // <-- ДОБАВИТЬ
+    RecordUndo();
 }
 
 std::vector<entt::entity> EditorUI::CollectSubtree(entt::entity root) const
@@ -1698,7 +1698,7 @@ void EditorUI::ApplyModernDarkStyle()
     ImGuiStyle& s = ImGui::GetStyle();
     ImVec4* c = s.Colors;
 
-    // ---- Геометрия ----
+
     s.WindowRounding    = 8.0f;
     s.ChildRounding     = 6.0f;
     s.FrameRounding     = 5.0f;
@@ -1707,7 +1707,7 @@ void EditorUI::ApplyModernDarkStyle()
     s.GrabRounding      = 5.0f;
     s.TabRounding       = 5.0f;
 
-    s.WindowBorderSize  = 0.0f;   // рамки не нужны — работает фон
+    s.WindowBorderSize  = 0.0f;
     s.FrameBorderSize   = 0.0f;
     s.PopupBorderSize   = 1.0f;
     s.WindowPadding     = ImVec2(10, 8);
@@ -1718,12 +1718,12 @@ void EditorUI::ApplyModernDarkStyle()
     s.GrabMinSize       = 12.0f;
     s.WindowTitleAlign  = ImVec2(0.0f, 0.5f);
 
-    // ---- Палитра ----
-    const ImVec4 bg0    (0.055f, 0.065f, 0.085f, 1.0f);  // окна
-    const ImVec4 bg1    (0.085f, 0.095f, 0.120f, 1.0f);  // фреймы/ребра
-    const ImVec4 bg2    (0.125f, 0.140f, 0.175f, 1.0f);  // hover
-    const ImVec4 bg3    (0.170f, 0.195f, 0.240f, 1.0f);  // active
-    const ImVec4 acc    (0.360f, 0.560f, 1.000f, 1.0f);  // #5C8FFF
+
+    const ImVec4 bg0    (0.055f, 0.065f, 0.085f, 1.0f);
+    const ImVec4 bg1    (0.085f, 0.095f, 0.120f, 1.0f);
+    const ImVec4 bg2    (0.125f, 0.140f, 0.175f, 1.0f);
+    const ImVec4 bg3    (0.170f, 0.195f, 0.240f, 1.0f);
+    const ImVec4 acc    (0.360f, 0.560f, 1.000f, 1.0f);
     const ImVec4 accDim (0.270f, 0.420f, 0.800f, 1.0f);
     const ImVec4 txt    (0.860f, 0.880f, 0.920f, 1.0f);
     const ImVec4 txtDim (0.520f, 0.545f, 0.600f, 1.0f);
@@ -1799,8 +1799,8 @@ void EditorUI::LoadEditorFont()
 
                 if (readBytes == static_cast<size_t>(sz))
                 {
-                    // FontDataOwnedByAtlas = true (default): ImGui забирает буфер,
-                    // вручную free НЕ вызываем.
+
+
                     ImFont* font = io.Fonts->AddFontFromMemoryTTF(
                         buf, static_cast<int>(sz), fontSize);
 
@@ -1830,11 +1830,11 @@ void EditorUI::LoadEditorFont()
         BINAX_LOG_INFO("[Editor] Font not found at '{}', using default", fontPath);
     }
 
-    // Обязательный фолбэк — современный ImGui требует хотя бы один шрифт
+
     if (!textFontLoaded)
         io.Fonts->AddFontDefault();
 
-    // Мержим FA из встроенного массива fa_solid_900[] (см. imgui_notify.h)
+
     ImGui::MergeIconsWithLatestFont(fontSize);
     BINAX_LOG_INFO("[Editor] Font Awesome 5 icons merged");
 }
@@ -1859,13 +1859,13 @@ bool EditorUI::AnimatedButton(const char* label, const ImVec2& size, bool primar
 
     const auto ez = iam_ease_preset(iam_ease_out_cubic);
 
-    // Масштаб: 1.0 → 1.04 (hover), 0.96 (press)
+
     const float target_scale = active ? 0.96f : (hovered ? 1.04f : 1.0f);
     const float scale = iam_tween_float(id, ImHashStr("scl"),
         target_scale, 0.15f, iam_ease_preset(iam_ease_out_back),
         iam_policy_crossfade, dt);
 
-    // Цвет
+
     const ImVec4 base    = primary ? ImVec4(0.36f, 0.56f, 1.00f, 1.0f)
                                    : ImVec4(0.085f, 0.095f, 0.12f, 1.0f);
     const ImVec4 hover_c = primary ? ImVec4(0.45f, 0.65f, 1.00f, 1.0f)
@@ -1882,7 +1882,7 @@ bool EditorUI::AnimatedButton(const char* label, const ImVec2& size, bool primar
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    // Мягкая тень при hover
+
     if (hovered)
     {
         dl->AddRectFilled(
@@ -1891,13 +1891,13 @@ bool EditorUI::AnimatedButton(const char* label, const ImVec2& size, bool primar
             IM_COL32(0, 0, 0, 50), 5.0f);
     }
 
-    // Тело
+
     dl->AddRectFilled(
         ImVec2(ctr.x - half.x, ctr.y - half.y),
         ImVec2(ctr.x + half.x, ctr.y + half.y),
         ImGui::ColorConvertFloat4ToU32(col), 5.0f);
 
-    // Текст
+
     const ImVec2 ts = ImGui::CalcTextSize(label);
     const ImU32 text_col = primary ? IM_COL32(255, 255, 255, 255)
                                    : IM_COL32(220, 225, 235, 255);
@@ -1923,13 +1923,13 @@ bool EditorUI::AnimatedIconButton(const char* icon, const char* tooltip, bool ac
 
     const auto ez = iam_ease_preset(iam_ease_out_cubic);
 
-    // Скейл
+
     const float target_scale = active ? 0.9f : (hovered ? 1.12f : 1.0f);
     const float scale = iam_tween_float(id, ImHashStr("scl"),
         target_scale, 0.15f, iam_ease_preset(iam_ease_out_back),
         iam_policy_crossfade, dt);
 
-    // Фон
+
     const ImVec4 base    = active_state ? ImVec4(0.36f, 0.56f, 1.00f, 1.0f)
                                          : ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
     const ImVec4 hover_c = active_state ? ImVec4(0.45f, 0.65f, 1.00f, 1.0f)
@@ -1957,7 +1957,7 @@ void EditorUI::ViewportFocusGlow()
     if (!m_ViewportHovered)
         return;
 
-    // Пульсация 1.0 → 1.6 → 1.0
+
     const float pulse = 1.0f + 0.6f *
         (0.5f + 0.5f * ImSin((float)ImGui::GetTime() * 2.5f));
 
@@ -1965,12 +1965,12 @@ void EditorUI::ViewportFocusGlow()
     const ImVec2 p = ImGui::GetItemRectMin();
     const ImVec2 s = ImGui::GetItemRectSize();
 
-    // Внешняя акцентная рамка
+
     dl->AddRect(p, ImVec2(p.x + s.x, p.y + s.y),
                 IM_COL32(92, 143, 255, (int)(60.0f * pulse)),
                 4.0f, 0, 2.0f);
 
-    // Мягкая внутренняя подсветка
+
     dl->AddRect(p, ImVec2(p.x + s.x, p.y + s.y),
                 IM_COL32(92, 143, 255, 30),
                 4.0f, 0, 1.0f);
@@ -1979,13 +1979,13 @@ void EditorUI::ViewportFocusGlow()
 void EditorUI::DrawAnimatedHeader(const char* label, bool* open)
 {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
-    ImGui::CollapsingHeader(label, open);   // ImGui сам анимирует через AnimationTime
+    ImGui::CollapsingHeader(label, open);
     ImGui::PopStyleVar();
 }
 
-// ============================================================
-// Undo / Redo
-// ============================================================
+
+
+
 
 std::string EditorUI::CaptureScene() const
 {
@@ -2007,14 +2007,14 @@ void EditorUI::RecordUndo()
 
     std::string state = CaptureScene();
 
-    // Не записываем дубликат текущего состояния
+
     if (m_UndoCursor >= 0 && m_UndoCursor < (int)m_UndoStates.size())
     {
         if (m_UndoStates[m_UndoCursor] == state)
             return;
     }
 
-    // Отрезаем "будущее" (redo-ветку)
+
     if (m_UndoCursor >= 0 && m_UndoCursor + 1 < (int)m_UndoStates.size())
         m_UndoStates.erase(m_UndoStates.begin() + m_UndoCursor + 1,
                            m_UndoStates.end());
@@ -2022,7 +2022,7 @@ void EditorUI::RecordUndo()
     m_UndoStates.push_back(std::move(state));
     m_UndoCursor = (int)m_UndoStates.size() - 1;
 
-    // Кап истории
+
     constexpr size_t kMaxUndoStates = 30;
     if (m_UndoStates.size() > kMaxUndoStates)
     {
@@ -2046,7 +2046,7 @@ void EditorUI::RestoreScene(const std::string& state)
         BINAX_LOG_ERROR("Undo/Redo: failed to restore scene state");
     }
 
-    // Гарантируем наличие системных сущностей
+
     {
         auto v = m_Registry.view<SkyboxComponent>();
         if (v.begin() == v.end())
@@ -2071,9 +2071,9 @@ void EditorUI::RestoreScene(const std::string& state)
     m_UndoSuppress = false;
 }
 
-// ============================================================
-// Multi-selection helpers
-// ============================================================
+
+
+
 void EditorUI::SelectOnly(entt::entity e)
 {
     m_SelectedEntities.clear();
@@ -2099,7 +2099,7 @@ void EditorUI::ToggleSelect(entt::entity e)
     else
     {
         m_SelectedEntities.insert(e);
-        m_SelectedEntity = e;   // новый primary
+        m_SelectedEntity = e;
     }
 }
 

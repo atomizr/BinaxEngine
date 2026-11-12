@@ -55,4 +55,4 @@ private:
     std::deque<LogEntry> m_Entries;
 };
 
-} // namespace Binax
+} 
