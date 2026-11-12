@@ -21,6 +21,7 @@
 #include "Renderer/Mesh.h"
 #include "Renderer/MeshLibrary.h"
 #include "Renderer/MaterialLibrary.h"
+#include "Renderer/im_anim.h"
 #include "Utils/Log.h"
 #include "Serialization/SceneSerializer.h"
 #include "Serialization/MaterialSerializer.h"
@@ -667,33 +668,27 @@ void EditorUI::DrawViewport()
 
     if (ImGui::Begin("Viewport", nullptr, flags))
     {
-        
-        auto OpButton = [&](const char* label, int op)
-        {
-            const bool active = (m_GizmoOperation == op);
-            if (active)
-            {
-                ImGui::PushStyleColor(ImGuiCol_Button,
-                                      ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            }
-            if (ImGui::Button(label))
-                m_GizmoOperation = op;
-            if (active)
-                ImGui::PopStyleColor();
-        };
+        // === Тулбар: анимированные иконки ===
+        if (AnimatedIconButton("M", "Move (W)",  m_GizmoOperation == 0))
+            m_GizmoOperation = 0;
+        ImGui::SameLine();
+        if (AnimatedIconButton("R", "Rotate (E)", m_GizmoOperation == 1))
+            m_GizmoOperation = 1;
+        ImGui::SameLine();
+        if (AnimatedIconButton("S", "Scale (R)",  m_GizmoOperation == 2))
+            m_GizmoOperation = 2;
 
-        OpButton("Move", 0);
-        ImGui::SameLine();
-        OpButton("Rotate", 1);
-        ImGui::SameLine();
-        OpButton("Scale", 2);
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        if (ImGui::Button(m_GizmoMode == 0 ? "World" : "Local"))
-            m_GizmoMode = (m_GizmoMode == 0) ? 1 : 0;
 
-        
+        if (AnimatedIconButton(m_GizmoMode == 0 ? "W" : "L",
+                               m_GizmoMode == 0 ? "World → Local" : "Local → World",
+                               false))
+        {
+            m_GizmoMode = (m_GizmoMode == 0) ? 1 : 0;
+        }
+
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
@@ -733,17 +728,6 @@ void EditorUI::DrawViewport()
 
         if (vpSize.x > 0 && vpSize.y > 0)
         {
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
             const ImVec2 fbScale = ImGui::GetIO().DisplayFramebufferScale;
             m_PendingViewportW = vpSize.x * (fbScale.x > 0.0f ? fbScale.x : 1.0f);
             m_PendingViewportH = vpSize.y * (fbScale.y > 0.0f ? fbScale.y : 1.0f);
@@ -758,6 +742,10 @@ void EditorUI::DrawViewport()
             ImVec2(1.0f, 0.0f));
 
         ImGui::Dummy(vpSize);
+
+        // === Анимированная подсветка viewport ===
+        ViewportFocusGlow();
+        // ======================================
 
         if (m_ViewportHovered || ImGuizmo::IsUsing())
             DrawGizmo();
@@ -950,14 +938,16 @@ void EditorUI::DrawHierarchy()
 {
     ImGui::Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
 
-    if (ImGui::Button("Save Scene")) SaveScene();
+    // === Анимированные кнопки вместо обычных ===
+    if (AnimatedButton("Save", ImVec2(80, 28), false)) SaveScene();
     ImGui::SameLine();
-    if (ImGui::Button("Load Scene")) LoadScene();
+    if (AnimatedButton("Load", ImVec2(80, 28), false)) LoadScene();
+    ImGui::SameLine();
+    if (AnimatedButton("+ New", ImVec2(80, 28), true)) CreateCubeEntity();
+    // ============================================
 
-    DrawCreateObjectDropdown();
     ImGui::Separator();
 
-    
     if (m_FocusSearch)
     {
         ImGui::SetKeyboardFocusHere();
@@ -998,8 +988,6 @@ void EditorUI::DrawHierarchy()
     }
     else
     {
-        
-        
         std::unordered_map<entt::entity, std::vector<entt::entity>> children;
         std::vector<entt::entity> roots;
 
@@ -1022,7 +1010,6 @@ void EditorUI::DrawHierarchy()
         for (auto entity : roots)
             DrawEntityRow(entity, children, visited);
 
-        
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         ImGui::Dummy(ImVec2(avail.x > 1.0f ? avail.x : 1.0f, 28.0f));
         if (ImGui::BeginDragDropTarget())
@@ -1036,7 +1023,6 @@ void EditorUI::DrawHierarchy()
         }
     }
 
-    
     if (m_PendingDuplicate != entt::null)
     {
         const entt::entity e = m_PendingDuplicate;
@@ -1262,9 +1248,6 @@ void EditorUI::DrawAddComponentMenu()
 
 void EditorUI::DrawMaterialEditor()
 {
-    
-    
-    
     if (!MaterialLibrary::Get().IsValid(m_EditingMaterial))
     {
         m_ShowMaterialEditor = false;
@@ -1272,10 +1255,28 @@ void EditorUI::DrawMaterialEditor()
         return;
     }
 
-    std::string title = "Material: " + MaterialLibrary::Get().GetName(m_EditingMaterial);
+    const float dt = ImGui::GetIO().DeltaTime;
+    const ImGuiID open_id = ImHashStr("mat_editor_open");
 
+    // Плавное появление: 0 → 1 за 0.25s
+    const float anim = iam_tween_float(open_id, ImHashStr("open"),
+        m_ShowMaterialEditor ? 1.0f : 0.0f,
+        0.25f, iam_ease_preset(iam_ease_out_cubic),
+        iam_policy_crossfade, dt);
+
+    std::string title = "Material: " + MaterialLibrary::Get().GetName(m_EditingMaterial);
     bool open = true;
+
     ImGui::SetNextWindowSize(ImVec2(480, 620), ImGuiCond_FirstUseEver);
+
+    // Slide-in из правого края
+    ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImVec2 base_pos(display.x - 500.0f, 40.0f);
+    ImVec2 pos(base_pos.x + (1.0f - anim) * 60.0f, base_pos.y);
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, anim);
+
     if (ImGui::Begin(title.c_str(), &open))
     {
         MaterialGPU&  m  = MaterialLibrary::Get().GetMutable(m_EditingMaterial);
@@ -1327,13 +1328,12 @@ void EditorUI::DrawMaterialEditor()
                                   std::function<void(const std::string&)> setter)
             {
                 ImGui::PushID(label);
-
                 ImGui::Text("%s", label);
                 ImGui::SameLine(110.0f);
 
-std::string display = currentPath.empty()
-    ? "(none)"
-    : PathToUtf8(PathFromUtf8(currentPath).filename());
+                std::string display = currentPath.empty()
+                    ? "(none)"
+                    : PathToUtf8(PathFromUtf8(currentPath).filename());
                 ImGui::TextWrapped("%s", display.c_str());
                 ImGui::SameLine();
 
@@ -1369,6 +1369,7 @@ std::string display = currentPath.empty()
         ImGui::TextDisabled("Handle: %u", m_EditingMaterial);
     }
     ImGui::End();
+    ImGui::PopStyleVar();
 
     if (!open)
     {
@@ -1757,6 +1758,142 @@ bool EditorUI::IsGizmoHovered() const { return ImGuizmo::IsOver(); }
 void EditorUI::AddPanelDrawer(std::function<void()> cb)
 {
     m_ExtraPanelDrawers.push_back(std::move(cb));
+}
+
+bool EditorUI::AnimatedButton(const char* label, const ImVec2& size, bool primary)
+{
+    const float dt = ImGui::GetIO().DeltaTime;
+    const ImGuiID id = ImHashStr(label);
+
+    ImGui::InvisibleButton(label, size);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active  = ImGui::IsItemActive();
+    const bool clicked = ImGui::IsItemClicked();
+
+    const auto ez = iam_ease_preset(iam_ease_out_cubic);
+
+    // Масштаб: 1.0 → 1.04 (hover), 0.96 (press)
+    const float target_scale = active ? 0.96f : (hovered ? 1.04f : 1.0f);
+    const float scale = iam_tween_float(id, ImHashStr("scl"),
+        target_scale, 0.15f, iam_ease_preset(iam_ease_out_back),
+        iam_policy_crossfade, dt);
+
+    // Цвет
+    const ImVec4 base    = primary ? ImVec4(0.36f, 0.56f, 1.00f, 1.0f)
+                                   : ImVec4(0.085f, 0.095f, 0.12f, 1.0f);
+    const ImVec4 hover_c = primary ? ImVec4(0.45f, 0.65f, 1.00f, 1.0f)
+                                   : ImVec4(0.13f, 0.15f, 0.19f, 1.0f);
+    const ImVec4 press_c = primary ? ImVec4(0.28f, 0.45f, 0.85f, 1.0f)
+                                   : ImVec4(0.18f, 0.20f, 0.25f, 1.0f);
+    const ImVec4 target_col = active ? press_c : (hovered ? hover_c : base);
+    const ImVec4 col = iam_tween_color(id, ImHashStr("bg"),
+        target_col, 0.20f, ez, iam_policy_crossfade, iam_col_oklab, dt);
+
+    const ImVec2 pos  = ImGui::GetItemRectMin();
+    const ImVec2 ctr  = ImVec2(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f);
+    const ImVec2 half = ImVec2(size.x * 0.5f * scale, size.y * 0.5f * scale);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // Мягкая тень при hover
+    if (hovered)
+    {
+        dl->AddRectFilled(
+            ImVec2(ctr.x - half.x + 2, ctr.y - half.y + 3),
+            ImVec2(ctr.x + half.x + 2, ctr.y + half.y + 3),
+            IM_COL32(0, 0, 0, 50), 5.0f);
+    }
+
+    // Тело
+    dl->AddRectFilled(
+        ImVec2(ctr.x - half.x, ctr.y - half.y),
+        ImVec2(ctr.x + half.x, ctr.y + half.y),
+        ImGui::ColorConvertFloat4ToU32(col), 5.0f);
+
+    // Текст
+    const ImVec2 ts = ImGui::CalcTextSize(label);
+    const ImU32 text_col = primary ? IM_COL32(255, 255, 255, 255)
+                                   : IM_COL32(220, 225, 235, 255);
+    dl->AddText(ImVec2(ctr.x - ts.x * 0.5f, ctr.y - ts.y * 0.5f),
+                text_col, label);
+
+    return clicked;
+}
+
+bool EditorUI::AnimatedIconButton(const char* icon, const char* tooltip, bool active_state)
+{
+    const float dt = ImGui::GetIO().DeltaTime;
+    const ImGuiID id = ImHashStr(icon);
+    const ImVec2 size(32.0f, 28.0f);
+
+    ImGui::InvisibleButton(icon, size);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active  = ImGui::IsItemActive();
+    const bool clicked = ImGui::IsItemClicked();
+
+    if (hovered && tooltip && *tooltip)
+        ImGui::SetTooltip("%s", tooltip);
+
+    const auto ez = iam_ease_preset(iam_ease_out_cubic);
+
+    // Скейл
+    const float target_scale = active ? 0.9f : (hovered ? 1.12f : 1.0f);
+    const float scale = iam_tween_float(id, ImHashStr("scl"),
+        target_scale, 0.15f, iam_ease_preset(iam_ease_out_back),
+        iam_policy_crossfade, dt);
+
+    // Фон
+    const ImVec4 base    = active_state ? ImVec4(0.36f, 0.56f, 1.00f, 1.0f)
+                                         : ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    const ImVec4 hover_c = active_state ? ImVec4(0.45f, 0.65f, 1.00f, 1.0f)
+                                         : ImVec4(0.13f, 0.15f, 0.19f, 1.0f);
+    const ImVec4 col = iam_tween_color(id, ImHashStr("bg"),
+        hovered ? hover_c : base, 0.15f, ez, iam_policy_crossfade, iam_col_oklab, dt);
+
+    const ImVec2 p = ImGui::GetItemRectMin();
+    const ImVec2 c(p.x + size.x * 0.5f, p.y + size.y * 0.5f);
+    const float  r = size.y * 0.5f * scale;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r),
+                      ImGui::ColorConvertFloat4ToU32(col), 4.0f);
+
+    const ImVec2 ts = ImGui::CalcTextSize(icon);
+    dl->AddText(ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f),
+                IM_COL32(220, 225, 235, 255), icon);
+
+    return clicked;
+}
+
+void EditorUI::ViewportFocusGlow()
+{
+    if (!m_ViewportHovered)
+        return;
+
+    // Пульсация 1.0 → 1.6 → 1.0
+    const float pulse = 1.0f + 0.6f *
+        (0.5f + 0.5f * ImSin((float)ImGui::GetTime() * 2.5f));
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetItemRectMin();
+    const ImVec2 s = ImGui::GetItemRectSize();
+
+    // Внешняя акцентная рамка
+    dl->AddRect(p, ImVec2(p.x + s.x, p.y + s.y),
+                IM_COL32(92, 143, 255, (int)(60.0f * pulse)),
+                4.0f, 0, 2.0f);
+
+    // Мягкая внутренняя подсветка
+    dl->AddRect(p, ImVec2(p.x + s.x, p.y + s.y),
+                IM_COL32(92, 143, 255, 30),
+                4.0f, 0, 1.0f);
+}
+
+void EditorUI::DrawAnimatedHeader(const char* label, bool* open)
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
+    ImGui::CollapsingHeader(label, open);   // ImGui сам анимирует через AnimationTime
+    ImGui::PopStyleVar();
 }
 
 } 

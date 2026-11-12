@@ -28,6 +28,7 @@ set(SOURCES
     src/Renderer/Texture.cpp
     src/Renderer/AssetRegistry.cpp
     src/Renderer/Cubemap.cpp
+    src/Renderer/im_anim.cpp 
 
     src/Editor/EditorUI.cpp
     src/Editor/EditorCamera.cpp

@@ -8,6 +8,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include <imgui.h>
+
 #include "Renderer/MaterialLibrary.h"
 #include "Renderer/MeshLibrary.h"
 
@@ -128,6 +130,10 @@ private:
     // У тебя было объявлено ApplyQtGrayStyle, а определено ApplyModernDarkStyle.
     void ApplyModernDarkStyle();
     void LoadEditorFont();
+    bool AnimatedButton(const char* label, const ImVec2& size, bool primary = false);
+    bool AnimatedIconButton(const char* icon, const char* tooltip, bool active);
+    void ViewportFocusGlow();
+    void DrawAnimatedHeader(const char* label, bool* open = nullptr);
 };
 
 }

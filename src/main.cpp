@@ -6,6 +6,7 @@
 #include <glm/gtc/matrix_inverse.hpp>
 #include <entt/entt.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -27,6 +28,7 @@
 #include "Renderer/InstanceBuffer.h"
 #include "Renderer/GPULight.h"
 #include "Renderer/AssetRegistry.h"
+#include "Renderer/im_anim.h"
 #include "ECS/Components/Transform.h"
 #include "ECS/Components/MeshComponent.h"
 #include "ECS/Components/MaterialComponent.h"
@@ -321,6 +323,9 @@ int main()
         bool vsyncEnabled = props.VSync;
         float smoothedFps = 0.0f;
 
+        // ============================================================
+        // Stats-панель: анимированный FPS + график + бюджет кадра
+        // ============================================================
         editorUI.AddPanelDrawer([&]()
         {
             ImGui::Begin("Stats", nullptr, ImGuiWindowFlags_NoCollapse);
@@ -333,8 +338,38 @@ int main()
                               ? instFps
                               : smoothedFps * 0.9f + instFps * 0.1f;
 
-            ImGui::Text("FPS:        %.1f", smoothedFps);
+            // Плавный FPS через ImAnim
+            const float displayFps = iam_tween_float(
+                ImGui::GetID("fps_display"),
+                ImHashStr("v"),
+                smoothedFps,
+                0.4f,
+                iam_ease_preset(iam_ease_out_cubic),
+                iam_policy_crossfade,
+                dt);
+
+            ImGui::Text("FPS:        %.1f", displayFps);
             ImGui::Text("Frame time: %.2f ms", ms);
+
+            // Мини-график FPS
+            static float fpsHistory[60] = {};
+            static int   fpsOffset = 0;
+            fpsHistory[fpsOffset] = smoothedFps;
+            fpsOffset = (fpsOffset + 1) % IM_ARRAYSIZE(fpsHistory);
+            ImGui::PlotLines("##fps", fpsHistory, IM_ARRAYSIZE(fpsHistory), fpsOffset,
+                             nullptr, 0.0f, 240.0f, ImVec2(-1, 40));
+
+            // Бюджет кадра 16.6 ms (60 FPS)
+            const float frameBudget = 16.6f;
+            const float currentMs = 1000.0f / std::max(1.0f, smoothedFps);
+            const float budget = std::clamp(currentMs / frameBudget, 0.0f, 1.0f);
+
+            const ImU32 barCol = (budget < 0.7f) ? IM_COL32(76, 200, 100, 255)
+                               : (budget < 1.0f) ? IM_COL32(255, 200, 60, 255)
+                                                 : IM_COL32(230, 70, 70, 255);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, barCol);
+            ImGui::ProgressBar(budget, ImVec2(-1, 6), "");
+            ImGui::PopStyleColor();
 
             ImGui::Separator();
             if (ImGui::Checkbox("VSync", &vsyncEnabled))
@@ -378,10 +413,18 @@ int main()
 
         glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
 
+        // ============================================================
+        // ОСНОВНОЙ ЦИКЛ — с iam_update_begin_frame / iam_clip_update
+        // ============================================================
         while (!window.ShouldClose())
         {
             timer.Update();
             float delta = timer.GetDelta();
+
+            // === ImAnim: обновление ДО всех tween/clip вызовов ===
+            iam_update_begin_frame();
+            iam_clip_update(delta);
+            // =======================================================
 
             Binax::Input::Update();
             window.Update();
@@ -503,6 +546,15 @@ int main()
 
             editorUI.Draw();
 
+            // === ImAnim: периодический GC ===
+            static float animGcTimer = 0.0f;
+            if ((animGcTimer += delta) > 1.0f) {
+                iam_gc(600);
+                iam_clip_gc(600);
+                animGcTimer = 0.0f;
+            }
+            // =================================
+
             window.SwapBuffers();
         }
 
@@ -512,6 +564,8 @@ int main()
         Binax::AssetRegistry::Get().Clear();
         Binax::MaterialLibrary::Get().Clear();
         Binax::MeshLibrary::Get().Clear();
+
+        iam_clip_shutdown();   // <-- ДОБАВИТЬ
     }
     catch (const std::exception& e)
     {
