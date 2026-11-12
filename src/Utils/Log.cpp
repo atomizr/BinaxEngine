@@ -1,5 +1,6 @@
 #include "Log.h"
 #include "Paths.h"
+#include "Utils/LogSink.h"
 
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -14,20 +15,15 @@ std::shared_ptr<spdlog::logger> Log::s_CoreLogger;
 
 void Log::Init()
 {
-    
-    
-    
     if (s_CoreLogger)
         return;
 
     std::vector<spdlog::sink_ptr> sinks;
 
-    
     auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     consoleSink->set_pattern("%^[%T] %n: %v%$");
     sinks.push_back(consoleSink);
 
-    
     try
     {
         const std::filesystem::path logPath = Paths::GetExecutableDir() / "debug.log";
@@ -38,9 +34,11 @@ void Log::Init()
     }
     catch (const std::exception& ex)
     {
-        std::fprintf(stderr,
-                     "BINAX log: file sink init failed: %s\n", ex.what());
+        std::fprintf(stderr, "BINAX log: file sink init failed: %s\n", ex.what());
     }
+
+    // === НОВОЕ: sink для встроенной консоли редактора ===
+    sinks.push_back(Binax::LogSink::Instance());
 
     s_CoreLogger = std::make_shared<spdlog::logger>(
         "BINAX", sinks.begin(), sinks.end());

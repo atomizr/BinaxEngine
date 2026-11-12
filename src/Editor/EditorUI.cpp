@@ -453,6 +453,9 @@ void EditorUI::HandleShortcuts()
         // F4 — открыть/закрыть Shader Editor
     if (Input::IsKeyJustPressed(GLFW_KEY_F4))
         m_ShaderEditor.ToggleVisible();
+        // ` (grave) — открыть/закрыть консоль
+    if (Input::IsKeyJustPressed(GLFW_KEY_GRAVE_ACCENT))
+        m_Console.ToggleVisible();
 }
 
 void EditorUI::FocusOnSelection()
@@ -614,6 +617,7 @@ void EditorUI::Draw()
         if (cb) cb();
 
     m_ShaderEditor.Draw();
+    m_Console.Draw(); 
 
     // === НОВОЕ: рисуем всплывающие уведомления (правый нижний угол) ===
     ImGui::RenderNotifications();
@@ -717,6 +721,14 @@ void EditorUI::DrawViewport()
                 ImGui::SetTooltip("Snap step: units (move), degrees (rotate), factor (scale)");
             ImGui::SameLine();
             ImGui::TextDisabled(rotation ? "deg" : (m_GizmoOperation == 2 ? "x" : "units"));
+        }
+                // === Кнопка Stats в правом углу тулбара ===
+        const float statsBtnW = 64.0f;
+        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - statsBtnW);
+        if (AnimatedIconButton("Stats##vp", "Toggle Stats Overlay",
+                               m_ShowViewportStats))
+        {
+            m_ShowViewportStats = !m_ShowViewportStats;
         }
 
         ImGui::Separator();

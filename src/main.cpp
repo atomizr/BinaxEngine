@@ -49,6 +49,16 @@
 #include "Utils/AssetPaths.h"
 #include "Reflect/EngineReflection.h"
 
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#endif
+
 namespace {
 
 entt::entity CreateEditorCameraEntity(entt::registry& registry, float aspect)
@@ -105,9 +115,6 @@ Binax::PostProcessSettings GatherPostProcessSettings(entt::registry& registry)
 {
     Binax::PostProcessSettings s;
 
-    
-    
-    
     s.TonemapMode = static_cast<int>(Binax::TonemapMode::Linear);
 
     auto view = registry.view<Binax::PostProcessComponent>();
@@ -115,7 +122,7 @@ Binax::PostProcessSettings GatherPostProcessSettings(entt::registry& registry)
     {
         const auto& c = view.get<Binax::PostProcessComponent>(e);
         if (!c.Enabled)
-            return s;   
+            return s;
 
         s.Enabled  = true;
         s.Exposure = c.Exposure;
@@ -197,6 +204,11 @@ Binax::SkyboxParams GatherSkyboxParams(entt::registry& registry)
 
 int main()
 {
+#ifdef _WIN32
+    if (HWND hwnd = GetConsoleWindow())
+        ShowWindow(hwnd, SW_HIDE);
+#endif
+
     Binax::Log::Init();
     Binax::Reflect::RegisterEngineComponents();
     BINAX_LOG_INFO("Binax Engine Starting...");
@@ -320,7 +332,7 @@ int main()
         Binax::EditorUI editorUI(window.GetGLFWWindow(), registry);
         editorUI.SetViewport(&viewport);
 
-                // Редактор шейдеров: при сохранении файла просим рендерер перечитать шейдеры
+        // Редактор шейдеров: при сохранении файла просим рендерер перечитать шейдеры
         editorUI.GetShaderEditor().SetReloadCallback(
             [&renderer](const std::string& /*path*/)
             {
@@ -331,11 +343,44 @@ int main()
         float smoothedFps = 0.0f;
 
         // ============================================================
-        // Stats-панель: анимированный FPS + график + бюджет кадра
+        // Stats-панель: анимированный FPS + график + бюджет кадра.
+        //
+        // Когда включён overlay-режим (кнопка Stats во Viewport),
+        // окно приковывается к правому верхнему углу viewport КАЖДЫЙ
+        // кадр и принудительно поднимается на верхний z-слой через
+        // BringWindowToDisplayFront — не забирая фокус у вьюпорта.
         // ============================================================
         editorUI.AddPanelDrawer([&]()
         {
-            ImGui::Begin("Stats", nullptr, ImGuiWindowFlags_NoCollapse);
+            const bool wantOverlay =
+                editorUI.IsViewportStatsVisible() && editorUI.HasViewport();
+
+            if (wantOverlay)
+            {
+                const ImVec4 r = editorUI.GetViewportScreenRect();
+
+                // Позиция пересчитывается каждый кадр → Stats следует за
+                // viewport'ом при ресайзе и не «отвязывается».
+                ImGui::SetNextWindowPos(
+                    ImVec2(r.x + r.z - 290.0f, r.y + 8.0f),
+                    ImGuiCond_Always);
+
+                // Полупрозрачность для эффекта overlay.
+                ImGui::SetNextWindowBgAlpha(0.92f);
+            }
+
+            ImGui::SetNextWindowSize(ImVec2(280.0f, 420.0f),
+                                     ImGuiCond_FirstUseEver);
+
+            bool open = true;
+            ImGui::Begin("Stats", &open, ImGuiWindowFlags_NoCollapse);
+
+            if (wantOverlay)
+            {
+                // Принудительно на верхний слой — но БЕЗ фокуса,
+                // чтобы не красть ввод у viewport'а.
+                ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+            }
 
             const float dt = timer.GetDelta();
             const float ms = dt * 1000.0f;
@@ -411,6 +456,10 @@ int main()
             ImGui::Text("Instances:  %u", Binax::InstanceBuffer::Get().GetCount());
 
             ImGui::End();
+
+            // Пользователь закрыл окно крестиком — выключаем overlay
+            if (!open)
+                editorUI.SetViewportStatsVisible(false);
         });
 
         std::vector<Binax::GPULight> collectedLights;
@@ -572,7 +621,7 @@ int main()
         Binax::MaterialLibrary::Get().Clear();
         Binax::MeshLibrary::Get().Clear();
 
-        iam_clip_shutdown();   // <-- ДОБАВИТЬ
+        iam_clip_shutdown();
     }
     catch (const std::exception& e)
     {

@@ -36,6 +36,7 @@ set(SOURCES
     src/Editor/PropertyWidgets.cpp
     src/Editor/TextEditor.cpp
     src/Editor/ShaderEditor.cpp
+    src/Editor/Console.cpp
 
     src/Serialization/SceneSerializer.cpp
     src/Serialization/PropertySerializer.cpp
