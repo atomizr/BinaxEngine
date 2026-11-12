@@ -1,17 +1,11 @@
 #version 460 core
 
-// FIX (критично): переработан с "один draw call на инстанс" на
-// "один workgroup на группу инстансов". Раньше при включённом GPU-culling
-// число draw call'ов росло с числом видимых инстансов — прямая регрессия
-// по сравнению с CPU-путём (RenderSystem::BuildFrameData), который
-// группирует инстансы по мешу. Теперь один draw на группу (если в ней
-// есть хотя бы один видимый инстанс), с сохранением MDI-контракта.
-
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct InstanceGPU {
     mat4 Model;
     mat4 PrevModel;
+    mat4 NormalMatrix;   // NEW: нормальная матрица (вместо inverse в верш. шейдере)
     uint MaterialId;
     uint MeshId;
     uint BoneOffset;
@@ -19,13 +13,13 @@ struct InstanceGPU {
 };
 
 struct MeshGPU {
-    uint BaseVertex;
-    uint VertexCount;
-    uint BaseIndex;
-    uint IndexCount;
-    vec3 AABBMin;
+    uint  BaseVertex;
+    uint  VertexCount;
+    uint  BaseIndex;
+    uint  IndexCount;
+    vec3  AABBMin;
     float _pad0;
-    vec3 AABBMax;
+    vec3  AABBMax;
     float _pad1;
 };
 
@@ -56,8 +50,6 @@ layout(std430, binding = 7) buffer DrawState {
     uint visibleInstanceCount;
 };
 
-// NEW: шаблоны draw-команд по группам (копия frame.Draws с CPU).
-// BaseInstance/InstanceCount каждой группы указывают в массив instances[].
 layout(std430, binding = 8) readonly buffer GroupTemplates {
     DrawElementsIndirect groupTemplates[];
 };
@@ -69,6 +61,7 @@ uniform uint u_MaxDraws;
 const uint kInstanceFlagSkinned = 1u;
 
 shared uint s_anyVisible;
+shared uint s_visibleCount;   // FIX: реальное число видимых инстансов в группе
 
 void main()
 {
@@ -79,15 +72,16 @@ void main()
     const DrawElementsIndirect tpl = groupTemplates[groupIdx];
     const uint base  = tpl.BaseInstance;
     const uint count = tpl.InstanceCount;
-
     if (count == 0u)
         return;
 
     const uint lane   = gl_LocalInvocationID.x;
     const uint stride = gl_WorkGroupSize.x;
 
-    if (lane == 0u)
-        s_anyVisible = 0u;
+    if (lane == 0u) {
+        s_anyVisible   = 0u;
+        s_visibleCount = 0u;
+    }
     barrier();
 
     for (uint i = lane; i < count; i += stride)
@@ -103,7 +97,6 @@ void main()
             const vec3 localCenter = (mesh.AABBMin + mesh.AABBMax) * 0.5;
             const vec3 localExtent = (mesh.AABBMax - mesh.AABBMin) * 0.5;
             const vec3 worldCenter = (inst.Model * vec4(localCenter, 1.0)).xyz;
-
             const mat3 absBasis = mat3(abs(inst.Model[0].xyz),
                                        abs(inst.Model[1].xyz),
                                        abs(inst.Model[2].xyz));
@@ -122,14 +115,13 @@ void main()
             }
         }
 
-        if (visible)
+        if (visible) {
             atomicOr(s_anyVisible, 1u);
+            atomicAdd(s_visibleCount, 1u);   // FIX: считаем реально видимые
+        }
     }
-
     barrier();
 
-    // FIX: проверка границы ДО инкремента счётчика (раньше atomicAdd
-    // выполнялся всегда, и drawCount мог "уехать" за u_MaxDraws).
     if (lane == 0u && s_anyVisible != 0u)
     {
         const uint slot = atomicAdd(drawCount, 1u);
@@ -139,8 +131,10 @@ void main()
         draws[slot] = tpl;
 
         const MeshGPU m = meshes[instances[base].MeshId];
-        atomicAdd(vertexCount,          m.VertexCount * count);
-        atomicAdd(indexCount,           m.IndexCount  * count);
-        atomicAdd(visibleInstanceCount, count);
+
+        // FIX: используем s_visibleCount вместо count
+        atomicAdd(vertexCount,          m.VertexCount * s_visibleCount);
+        atomicAdd(indexCount,           m.IndexCount  * s_visibleCount);
+        atomicAdd(visibleInstanceCount, s_visibleCount);
     }
 }
