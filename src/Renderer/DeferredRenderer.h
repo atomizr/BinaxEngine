@@ -148,6 +148,12 @@ public:
     bool IsTAAEnabled() const { return m_TAAEnabled; }
     void ReloadShaders();
 
+    void RenderOutlinePass(const FrameRenderData& frame,
+                           entt::entity selectedEntity,
+                           const glm::mat4& viewMatrix,
+                           const glm::mat4& projectionMatrix,
+                           uint32_t width, uint32_t height);
+
 private:
     static constexpr uint32_t kCullGroupSize = 64;
     static constexpr uint32_t kBloomMipCount = 5;
@@ -162,6 +168,7 @@ private:
     std::unique_ptr<Shader>      m_MotionBlurShader;
     std::unique_ptr<Shader>      m_BloomDownShader;
     std::unique_ptr<Shader>      m_BloomUpShader;
+    std::unique_ptr<Shader>      m_OutlineShader;
 
     std::unique_ptr<Framebuffer> m_HDRFBO;
     std::unique_ptr<Framebuffer> m_LDRFBO;
@@ -170,6 +177,11 @@ private:
     std::unique_ptr<Framebuffer> m_BloomMips[kBloomMipCount];
 
     std::unique_ptr<Framebuffer> m_TAAHistory[2];
+        std::unique_ptr<Framebuffer> m_OutlineFBO;
+    bool                         m_HasOutline = false;
+    
+
+
     int  m_TAAHistoryIndex = 0;
     bool m_TAAHistoryValid = false;
     uint32_t m_TaaFrameIndex = 0;

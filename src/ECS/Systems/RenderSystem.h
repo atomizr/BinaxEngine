@@ -27,6 +27,7 @@ namespace Binax {
 struct FrameRenderData
 {
     std::vector<InstanceGPU>          Instances;
+    std::vector<entt::entity>         InstanceEntities;
     std::vector<DrawElementsIndirect> Draws;
     std::vector<uint32_t>             DrawVertexCounts;
 };
@@ -37,11 +38,13 @@ public:
     static void BuildFrameData(entt::registry& registry, FrameRenderData& out)
     {
         out.Instances.clear();
+        out.InstanceEntities.clear();
         out.Draws.clear();
         out.DrawVertexCounts.clear();
 
         struct Candidate
         {
+            entt::entity   Entity;
             MeshHandle     Mesh;
             MaterialHandle Material;
             glm::mat4      Model;
@@ -83,7 +86,7 @@ public:
             history.PrevModel = model;
             history.Valid     = true;
 
-            cands.push_back({ mc.MeshId, mat, model, prevModel });
+            cands.push_back({ e, mc.MeshId, mat, model, prevModel });
         }
 
         std::sort(cands.begin(), cands.end(),
@@ -120,6 +123,7 @@ public:
                 g.BoneOffset  = 0;
                 g.Flags       = InstanceFlags::None;
                 out.Instances.push_back(g);
+                out.InstanceEntities.push_back(cands[k].Entity); 
             }
 
             instanceCursor += instCount;

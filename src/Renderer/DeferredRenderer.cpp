@@ -247,6 +247,24 @@ void DeferredRenderer::EnsurePostTargets(uint32_t width, uint32_t height)
         m_HasPrevViewProj = false;
         m_TaaFrameIndex   = 0;
     }
+        // === Outline FBO ===
+    if (!m_OutlineFBO)
+    {
+        m_OutlineFBO = std::make_unique<Framebuffer>(width, height);
+        m_OutlineFBO->Bind();
+        m_OutlineFBO->AttachColorTexture(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+        m_OutlineFBO->CheckStatus();
+        m_OutlineFBO->Unbind();
+
+        glBindTexture(GL_TEXTURE_2D, m_OutlineFBO->GetColorAttachment(0));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    else
+    {
+        m_OutlineFBO->Resize(width, height);
+    }
 }
 
 void DeferredRenderer::InitShaders()
@@ -269,6 +287,9 @@ void DeferredRenderer::InitShaders()
     m_MotionBlurShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "motion_blur.frag"));
     m_BloomDownShader  = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "bloom_down.frag"));
     m_BloomUpShader    = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "bloom_up.frag"));
+        m_OutlineShader = Shader::FromFiles(
+        Paths::Resolve(dir + "outline.vert"),
+        Paths::Resolve(dir + "outline.frag"));
 
     const std::string cullPath = Paths::Resolve(dir + "frustum_cull.comp");
     try
@@ -570,6 +591,18 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
     m_LightingShader->SetInt("u_NormalTexture",   1);
     m_LightingShader->SetInt("u_AlbedoTexture",   2);
     m_LightingShader->SetInt("u_MaterialTexture", 3);
+        // Outline texture — слот 5 (4 уже занят cubemap'ом)
+    if (m_HasOutline && m_OutlineFBO)
+    {
+        glActiveTexture(GL_TEXTURE0 + 5);
+        glBindTexture(GL_TEXTURE_2D, m_OutlineFBO->GetColorAttachment(0));
+        m_LightingShader->SetInt("u_OutlineTexture", 5);
+        m_LightingShader->SetInt("u_HasOutline",     1);
+    }
+    else
+    {
+        m_LightingShader->SetInt("u_HasOutline", 0);
+    }
     m_LightingShader->SetVec3("u_CameraPosition", cameraPosition);
     m_LightingShader->SetMat4("u_InvViewProj", invViewProj);
 
@@ -940,6 +973,94 @@ void DeferredRenderer::ApplyFXAA(uint32_t sourceTexture,
     DrawFullscreenQuad();
     m_FXAAShader->Unbind();
     glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+// ============================================================
+// Outline pass — выделение выбранного объекта
+// ============================================================
+void DeferredRenderer::RenderOutlinePass(const FrameRenderData& frame,
+                                         entt::entity selectedEntity,
+                                         const glm::mat4& viewMatrix,
+                                         const glm::mat4& projectionMatrix,
+                                         uint32_t width, uint32_t height)
+{
+    m_HasOutline = false;
+
+    if (!m_OutlineShader || !m_OutlineFBO)
+        return;
+
+    if (selectedEntity == entt::null)
+        return;
+
+    EnsurePostTargets(width ? width : m_GBuffer->GetWidth(),
+                      height ? height : m_GBuffer->GetHeight());
+
+    // Ищем instance выделенного entity
+    int selectedIdx = -1;
+    for (size_t i = 0; i < frame.InstanceEntities.size(); ++i)
+    {
+        if (frame.InstanceEntities[i] == selectedEntity)
+        {
+            selectedIdx = (int)i;
+            break;
+        }
+    }
+
+    if (selectedIdx < 0)
+        return;
+
+    const InstanceGPU& inst = frame.Instances[selectedIdx];
+    const MeshGPU&     mesh = MeshLibrary::Get().Get(inst.MeshId);
+    if (mesh.IndexCount == 0)
+        return;
+
+    m_OutlineFBO->Bind();
+
+    // Привязываем depth из G-Buffer — объект за другими объектами будет скрыт
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                           GL_TEXTURE_2D,
+                           m_GBuffer->GetDepthAttachment(), 0);
+
+    glViewport(0, 0, (GLsizei)width, (GLsizei)height);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+
+    // === ФИКС Z-FIGHTING ===
+    // Слегка тянем depth фрагментов к камере, чтобы они гарантированно
+    // проходили GL_LEQUAL против depth из G-Buffer на копиланарных пикселях.
+    // factor=-1.0, units=-1.0 = сместить к камере на 1 unit в depth.
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.0f, -1.0f);
+
+    m_OutlineShader->Bind();
+    m_OutlineShader->SetMat4("u_Model",      inst.Model);
+    m_OutlineShader->SetMat4("u_View",       viewMatrix);
+    m_OutlineShader->SetMat4("u_Projection", projectionMatrix);
+
+    MeshLibrary::Get().BindVAO();
+    const void* indexOffset =
+        (const void*)(uintptr_t)(mesh.BaseIndex * sizeof(uint32_t));
+
+    glDrawElementsBaseVertex(GL_TRIANGLES,
+                             (GLsizei)mesh.IndexCount,
+                             GL_UNSIGNED_INT,
+                             indexOffset,
+                             (GLint)mesh.BaseVertex);
+
+    glBindVertexArray(0);
+    m_OutlineShader->Unbind();
+
+    glDisable(GL_POLYGON_OFFSET_FILL);   // <-- ДОБАВИТЬ
+    glDepthMask(GL_TRUE);
+    m_OutlineFBO->Unbind();
+
+    m_HasOutline = true;
 }
 
 void DeferredRenderer::ReloadShaders()

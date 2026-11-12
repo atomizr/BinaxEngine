@@ -571,11 +571,21 @@ int main()
 
             Binax::RenderSystem::BuildFrameData(registry, frameData);
 
-            renderer.GeometryPass(frameData,
-                                  editorCamera.GetViewMatrix(),
-                                  editorCamera.GetProjectionMatrix());
+    renderer.GeometryPass(frameData,
+                          editorCamera.GetViewMatrix(),
+                          editorCamera.GetProjectionMatrix());
 
-            collectedLights.clear();
+    // === Outline выделенного объекта ===
+    renderer.RenderOutlinePass(
+        frameData,
+        editorUI.GetSelectedEntity(),
+        editorCamera.GetViewMatrix(),
+        editorCamera.GetProjectionMatrix(),
+        (uint32_t)viewport.GetSize().x,
+        (uint32_t)viewport.GetSize().y);
+    // ===================================
+
+    collectedLights.clear();
             Binax::RenderSystem::CollectLights(registry, collectedLights);
 
             Binax::SkyboxParams skyboxParams = GatherSkyboxParams(registry);

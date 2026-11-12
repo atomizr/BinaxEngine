@@ -7,20 +7,20 @@ uniform sampler2D u_PositionTexture;
 uniform sampler2D u_NormalTexture;
 uniform sampler2D u_AlbedoTexture;
 uniform sampler2D u_MaterialTexture;
+uniform sampler2D u_OutlineTexture;
+uniform int       u_HasOutline;
 
 uniform vec3  u_CameraPosition;
 uniform mat4  u_InvViewProj;
 
-
 uniform samplerCube u_EnvironmentMap;
 uniform int   u_HasEnvironment;
-uniform float u_SkyboxRotation;    
+uniform float u_SkyboxRotation;
 uniform float u_SkyboxBrightness;
 
-
 uniform int   u_FogEnabled;
-uniform int   u_FogMode;        
-uniform vec3  u_FogColor;       
+uniform int   u_FogMode;
+uniform vec3  u_FogColor;
 uniform float u_FogDensity;
 uniform float u_FogStart;
 uniform float u_FogEnd;
@@ -40,6 +40,49 @@ uniform Light u_Lights[MAX_LIGHTS];
 uniform int   u_LightCount;
 
 const float PI = 3.14159265359;
+
+// ---------------------------------------------------------------------------
+// Outline dilate — превращает сплошную маску объекта в пиксельное кольцо
+// ---------------------------------------------------------------------------
+vec3 OutlineComposite(vec3 baseColor, vec2 uv)
+{
+    if (u_HasOutline != 1)
+        return baseColor;
+
+    vec2 texel = 1.0 / vec2(textureSize(u_OutlineTexture, 0));
+
+    // Внутри самого объекта outline не рисуем
+    float center = texture(u_OutlineTexture, uv).a;
+    if (center > 0.5)
+        return baseColor;
+
+    // Ищем "solid" в радиусе R пикселей. Если нашли — здесь кольцо.
+    const int   R      = 2;       // радиус в пикселях (можно 2..4)
+    const float step   = 1.0;
+    float found = 0.0;
+
+    for (int y = -R; y <= R; ++y)
+    {
+        for (int x = -R; x <= R; ++x)
+        {
+            if (x == 0 && y == 0) continue;
+            float d2 = float(x*x + y*y);
+            if (d2 > float(R*R)) continue;    // круглый радиус, а не квадрат
+
+            float a = texture(u_OutlineTexture,
+                              uv + vec2(x, y) * texel * step).a;
+            if (a > 0.5) { found = 1.0; break; }
+        }
+        if (found > 0.5) break;
+    }
+
+    if (found < 0.5)
+        return baseColor;
+
+    // Акцентный цвет из палитры редактора (#5C8FFF)
+    vec3 outlineColor = vec3(0.36, 0.56, 1.0);
+    return outlineColor;
+}
 
 
 
@@ -71,7 +114,6 @@ vec3 F_Schlick(float cosTheta, vec3 F0)
 vec3 EvaluateBRDF(vec3 N, vec3 V, vec3 L, vec3 radiance,
                   vec3 albedo, float metallic, float roughness)
 {
-    
     vec3 Hv = V + L;
     float hLen = length(Hv);
     if (hLen < 1e-5) return vec3(0.0);
@@ -106,11 +148,8 @@ float PointAttenuation(float dist, float range)
     return cutoff / max(d2, 1e-3);
 }
 
-
-
 vec3 ComputeRayDirection()
 {
-    
     vec4 clip  = vec4(v_UV * 2.0 - 1.0, 1.0, 1.0);
     vec4 world = u_InvViewProj * clip;
     return normalize(world.xyz / world.w - u_CameraPosition);
@@ -118,7 +157,6 @@ vec3 ComputeRayDirection()
 
 vec3 SampleSkybox(vec3 dir)
 {
-    
     float c = cos(u_SkyboxRotation);
     float s = sin(u_SkyboxRotation);
     vec3 rotated = vec3(
@@ -145,13 +183,12 @@ void main()
     float roughness = clamp(mat.g, 0.04, 1.0);
     float emissive  = mat.b;
 
-    
     bool  skyReflEnabled  = mat.a >= 0.0;
     float skyReflStrength = max(mat.a, 0.0);
 
-    
-    
-    
+    // ============================================================
+    // SKY BRANCH — с экранным outline
+    // ============================================================
     if (dot(Nraw, Nraw) < 1e-4)
     {
         vec3 color = vec3(0.0);
@@ -162,12 +199,15 @@ void main()
             color = SampleSkybox(dir);
         }
 
-        
+        color = OutlineComposite(color, v_UV);
+
         FragColor = vec4(color, 1.0);
         return;
     }
 
-    
+    // ============================================================
+    // STANDARD LIGHTING
+    // ============================================================
     vec3 N = normalize(Nraw);
     vec3 V = normalize(u_CameraPosition - worldPos);
     vec3 Lo = vec3(0.0);
@@ -210,7 +250,6 @@ void main()
         Lo += EvaluateBRDF(N, V, L, radiance, albedo, metallic, roughness);
     }
 
-    
     vec3 skyColor    = vec3(0.35, 0.42, 0.55);
     vec3 groundColor = vec3(0.12, 0.10, 0.08);
     float hemi       = N.y * 0.5 + 0.5;
@@ -218,11 +257,9 @@ void main()
 
     if (u_HasEnvironment == 1)
     {
-        
         vec3 skyN = SampleSkybox(N);
         ambient += skyN * albedo * ao * 0.15;
 
-        
         if (skyReflEnabled)
         {
             vec3 R    = reflect(-V, N);
@@ -240,9 +277,6 @@ void main()
 
     vec3 color = ambient + Lo + albedo * emissive;
 
-    
-    
-    
     if (u_FogEnabled == 1)
     {
         const float dist = length(u_CameraPosition - worldPos);
@@ -263,12 +297,14 @@ void main()
             fog = 1.0 - exp(-d * d);
         }
 
-        
         const vec3 fogLinear = pow(max(u_FogColor, vec3(0.0)), vec3(2.2));
         color = mix(color, fogLinear, clamp(fog, 0.0, 1.0));
     }
 
-    
-    
+    // ============================================================
+    // OUTLINE — экранный dilate поверх сцены и неба
+    // ============================================================
+    color = OutlineComposite(color, v_UV);
+
     FragColor = vec4(color, 1.0);
 }

@@ -54,6 +54,7 @@ public:
     Console& GetConsole() { return m_Console; }
     ShaderEditor& GetShaderEditor() { return m_ShaderEditor; }
     bool IsViewportStatsVisible() const { return m_ShowViewportStats; }
+    entt::entity GetSelectedEntity() const { return m_SelectedEntity; }
     bool HasViewport() const            { return m_Viewport != nullptr; }
     void SetViewportStatsVisible(bool v) { m_ShowViewportStats = v; }
         // === Undo / Redo ===
