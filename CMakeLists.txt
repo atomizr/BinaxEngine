@@ -34,6 +34,8 @@ set(SOURCES
     src/Editor/EditorCamera.cpp
     src/Editor/Viewport.cpp
     src/Editor/PropertyWidgets.cpp
+    src/Editor/TextEditor.cpp
+    src/Editor/ShaderEditor.cpp
 
     src/Serialization/SceneSerializer.cpp
     src/Serialization/PropertySerializer.cpp

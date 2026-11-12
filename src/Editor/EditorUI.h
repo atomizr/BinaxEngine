@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <imgui.h>
+#include "Editor/ShaderEditor.h"
 
 #include "Renderer/MaterialLibrary.h"
 #include "Renderer/MeshLibrary.h"
@@ -49,6 +50,7 @@ public:
     // Всплывающие уведомления. ImGuiToastType = int (typedef в imgui_notify.h),
     // поэтому здесь int — совместимо с ImGuiToastType_Success и т.д.
     void Notify(int type, int dismissMs, const char* format = nullptr, ...);
+    ShaderEditor& GetShaderEditor() { return m_ShaderEditor; }
 
 private:
     entt::registry& m_Registry;
@@ -134,6 +136,7 @@ private:
     bool AnimatedIconButton(const char* icon, const char* tooltip, bool active);
     void ViewportFocusGlow();
     void DrawAnimatedHeader(const char* label, bool* open = nullptr);
+    ShaderEditor m_ShaderEditor;
 };
 
 }

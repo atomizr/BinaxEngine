@@ -146,6 +146,7 @@ public:
         m_HasPrevViewProj = false;
     }
     bool IsTAAEnabled() const { return m_TAAEnabled; }
+    void ReloadShaders();
 
 private:
     static constexpr uint32_t kCullGroupSize = 64;

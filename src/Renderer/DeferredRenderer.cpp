@@ -942,4 +942,31 @@ void DeferredRenderer::ApplyFXAA(uint32_t sourceTexture,
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+void DeferredRenderer::ReloadShaders()
+{
+    auto reloadSafe = [](std::unique_ptr<Shader>& shader)
+    {
+        if (shader)
+        {
+            try { shader->Reload(); }
+            catch (const std::exception& e)
+            {
+                BINAX_LOG_ERROR("Shader reload failed: {0}", e.what());
+            }
+        }
+    };
+
+    reloadSafe(m_GeometryShader);
+    reloadSafe(m_LightingShader);
+    reloadSafe(m_FXAAShader);
+    reloadSafe(m_TAAShader);
+    reloadSafe(m_TonemapShader);
+    reloadSafe(m_CullShader);
+    reloadSafe(m_MotionBlurShader);
+    reloadSafe(m_BloomDownShader);
+    reloadSafe(m_BloomUpShader);
+
+    BINAX_LOG_INFO("Shaders reloaded from disk");
+}
+
 }

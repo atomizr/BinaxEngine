@@ -320,6 +320,13 @@ int main()
         Binax::EditorUI editorUI(window.GetGLFWWindow(), registry);
         editorUI.SetViewport(&viewport);
 
+                // Редактор шейдеров: при сохранении файла просим рендерер перечитать шейдеры
+        editorUI.GetShaderEditor().SetReloadCallback(
+            [&renderer](const std::string& /*path*/)
+            {
+                renderer.ReloadShaders();
+            });
+
         bool vsyncEnabled = props.VSync;
         float smoothedFps = 0.0f;
 

@@ -450,6 +450,9 @@ void EditorUI::HandleShortcuts()
     {
         FocusOnSelection();
     }
+        // F4 — открыть/закрыть Shader Editor
+    if (Input::IsKeyJustPressed(GLFW_KEY_F4))
+        m_ShaderEditor.ToggleVisible();
 }
 
 void EditorUI::FocusOnSelection()
@@ -609,6 +612,8 @@ void EditorUI::Draw()
 
     for (auto& cb : m_ExtraPanelDrawers)
         if (cb) cb();
+
+    m_ShaderEditor.Draw();
 
     // === НОВОЕ: рисуем всплывающие уведомления (правый нижний угол) ===
     ImGui::RenderNotifications();
@@ -944,6 +949,8 @@ void EditorUI::DrawHierarchy()
     if (AnimatedButton("Load", ImVec2(80, 28), false)) LoadScene();
     ImGui::SameLine();
     if (AnimatedButton("+ New", ImVec2(80, 28), true)) CreateCubeEntity();
+    if (AnimatedButton("</>", ImVec2(48, 28), false)) m_ShaderEditor.ToggleVisible();  // <-- ДОБАВИТЬ
+
     // ============================================
 
     ImGui::Separator();
