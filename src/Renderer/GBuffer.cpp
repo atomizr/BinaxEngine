@@ -15,23 +15,11 @@ void GBuffer::Init(uint32_t width, uint32_t height)
     Bind();
 
     
-    AttachColorTexture(GL_RGB16F, GL_RGB, GL_FLOAT, POSITION);
-
-    
-    
-    AttachColorTexture(GL_RGB16F, GL_RGB, GL_FLOAT, NORMAL);
-
-    
+    AttachColorTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, POSITION);
+    AttachColorTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, NORMAL);
     AttachColorTexture(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, ALBEDO_AO);
-
-    
-    
     AttachColorTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, MATERIAL);
-
-    
-    
     AttachColorTexture(GL_RG16F, GL_RG, GL_FLOAT, VELOCITY);
-
     AttachDepthStencilTexture(GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL,
                               GL_UNSIGNED_INT_24_8);
 
