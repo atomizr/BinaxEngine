@@ -56,6 +56,11 @@ public:
     bool IsViewportStatsVisible() const { return m_ShowViewportStats; }
     bool HasViewport() const            { return m_Viewport != nullptr; }
     void SetViewportStatsVisible(bool v) { m_ShowViewportStats = v; }
+        // === Undo / Redo ===
+    bool CanUndo() const { return m_UndoCursor > 0; }
+    bool CanRedo() const { return m_UndoCursor + 1 < (int)m_UndoStates.size(); }
+    void Undo();
+    void Redo();
 
     ImVec4 GetViewportScreenRect() const
     {
@@ -132,6 +137,15 @@ private:
     ShaderEditor m_ShaderEditor;
     Console m_Console;
     bool m_ShowViewportStats = false;
+    std::vector<std::string> m_UndoStates;
+    int  m_UndoCursor          = -1;
+    bool m_UndoSuppress        = false;
+    bool m_GizmoWasUsing       = false;
+    bool m_InspectorPendingRec = false;
+    void ResetUndo();
+    void RecordUndo();
+    std::string CaptureScene() const;
+    void RestoreScene(const std::string& state);
 };
 
 }

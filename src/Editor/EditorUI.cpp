@@ -82,13 +82,15 @@ EditorUI::EditorUI(GLFWwindow* window, entt::registry& registry)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigWindowsMoveFromTitleBarOnly = true;
 
-    ApplyModernDarkStyle();   // <-- БЫЛО ApplyQtGrayStyle()
+    ApplyModernDarkStyle();
     LoadEditorFont();
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 460");
 
     InitComponentFactory();
+
+    ResetUndo();   // <-- ДОБАВИТЬ: стартовый snapshot
 }
 
 EditorUI::~EditorUI()
@@ -119,8 +121,7 @@ void EditorUI::AddComponentToEntity(entt::entity entity, const std::string& comp
         BINAX_LOG_WARN("Cannot add '{}' to Skybox", componentName);
         return;
     }
-    
-    
+
     if (componentName == "Post Processing")
     {
         auto ppView = m_Registry.view<PostProcessComponent>();
@@ -140,6 +141,8 @@ void EditorUI::AddComponentToEntity(entt::entity entity, const std::string& comp
     entry->AddDefault(m_Registry, entity);
     BINAX_LOG_INFO("Added '{}' to entity {}", componentName, (uint32_t)entity);
     Notify(ImGuiToastType_Success, 2000, "Added '%s'", componentName.c_str());
+
+    RecordUndo();   // <-- ДОБАВИТЬ
 }
 
 void EditorUI::RemoveComponentFromEntity(entt::entity entity, const std::string& componentName)
@@ -173,6 +176,8 @@ void EditorUI::RemoveComponentFromEntity(entt::entity entity, const std::string&
     entry->Remove(m_Registry, entity);
     BINAX_LOG_INFO("Removed '{}' from entity {}", componentName, (uint32_t)entity);
     Notify(ImGuiToastType_Info, 2000, "Removed '%s'", componentName.c_str());
+
+    RecordUndo();   // <-- ДОБАВИТЬ
 }
 
 
@@ -223,7 +228,6 @@ void EditorUI::LoadScene()
     if (std::filesystem::exists(Paths::FromUtf8(ppPath), ec) && !ec)
         PostProcessSerializer::Load(m_Registry, ppPath);
 
-    // --- Skybox ---
     {
         auto skyView = m_Registry.view<SkyboxComponent>();
         if (skyView.begin() == skyView.end())
@@ -235,7 +239,6 @@ void EditorUI::LoadScene()
         }
     }
 
-    // --- PostProcess ---
     {
         auto ppView = m_Registry.view<PostProcessComponent>();
         if (ppView.begin() == ppView.end())
@@ -251,7 +254,7 @@ void EditorUI::LoadScene()
 
     BINAX_LOG_INFO("Level loaded");
 
-    // === НОВОЕ ===
+    ResetUndo();   // <-- ДОБАВИТЬ: новая сцена = новая история
     Notify(ImGuiToastType_Success, 3000, "Level loaded");
 }
 
@@ -303,9 +306,9 @@ void EditorUI::DeleteEntity(entt::entity entity)
 
     BINAX_LOG_INFO("Entity {0} destroyed (with subtree: {1} entities)",
                    (uint32_t)entity, destroyed);
-
-    // === НОВОЕ ===
     Notify(ImGuiToastType_Info, 2500, "Deleted '%s'", name.c_str());
+
+    RecordUndo();   // <-- ДОБАВИТЬ
 }
 
 bool EditorUI::IsDescendantOf(entt::entity candidate, entt::entity ancestor) const
@@ -346,7 +349,6 @@ void EditorUI::SetParent(entt::entity child, entt::entity parent)
         }
     }
 
-    
     const glm::mat4 worldBefore = TransformSystem::GetWorldMatrix(m_Registry, child);
 
     if (parent == entt::null)
@@ -364,7 +366,7 @@ void EditorUI::SetParent(entt::entity child, entt::entity parent)
     glm::vec4 perspective;
     glm::quat rotation;
     if (!glm::decompose(local, scale, rotation, translation, skew, perspective))
-        return;   
+        return;
 
     if (!std::isfinite(translation.x) || !std::isfinite(translation.y) ||
         !std::isfinite(translation.z))
@@ -394,6 +396,8 @@ void EditorUI::SetParent(entt::entity child, entt::entity parent)
                    GetEntityName(child),
                    (parent == entt::null) ? std::string("<root>") : GetEntityName(parent));
     Notify(ImGuiToastType_Info, 2000, "Reparented");
+
+    RecordUndo();   // <-- ДОБАВИТЬ
 }
 
 bool EditorUI::IsEditorCamera(entt::entity entity) const
@@ -456,6 +460,19 @@ void EditorUI::HandleShortcuts()
         // ` (grave) — открыть/закрыть консоль
     if (Input::IsKeyJustPressed(GLFW_KEY_GRAVE_ACCENT))
         m_Console.ToggleVisible();
+    const bool shift = Input::IsKeyPressed(GLFW_KEY_LEFT_SHIFT) ||
+                       Input::IsKeyPressed(GLFW_KEY_RIGHT_SHIFT);
+
+    if (ctrl && Input::IsKeyJustPressed(GLFW_KEY_Z))
+    {
+        if (shift) Redo();
+        else       Undo();
+    }
+
+    if (ctrl && Input::IsKeyJustPressed(GLFW_KEY_Y))
+    {
+        Redo();
+    }
 }
 
 void EditorUI::FocusOnSelection()
@@ -829,8 +846,6 @@ void EditorUI::DrawGizmo()
 
     auto& transform = m_Registry.get<Transform>(m_SelectedEntity);
 
-    
-    
     glm::mat4 parentWorld = glm::mat4(1.0f);
     if (const auto* pc = m_Registry.try_get<ParentComponent>(m_SelectedEntity))
     {
@@ -863,9 +878,6 @@ void EditorUI::DrawGizmo()
         glm::quat rotation;
         glm::decompose(local, scale, rotation, translation, skew, perspective);
 
-        
-        
-        
         if (m_SnapEnabled)
         {
             const float step = SnapStep();
@@ -894,7 +906,6 @@ void EditorUI::DrawGizmo()
                     const glm::vec3 snapped = glm::round(scale / step) * step;
                     auto keepNonZero = [step](float v)
                     {
-                        
                         if (std::abs(v) < step)
                             return (v < 0.0f) ? -step : step;
                         return v;
@@ -906,9 +917,6 @@ void EditorUI::DrawGizmo()
             }
         }
 
-        
-        
-        
         constexpr float kMinScale = 1e-4f;
         auto clampScale = [&](float s)
         {
@@ -924,19 +932,24 @@ void EditorUI::DrawGizmo()
             std::isfinite(translation.z))
             transform.Position = translation;
 
-        
-        
         const float qlen2 = rotation.w * rotation.w + rotation.x * rotation.x +
                             rotation.y * rotation.y + rotation.z * rotation.z;
         transform.Rotation = (qlen2 > 1e-12f) ? glm::normalize(rotation)
                                               : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         transform.Scale    = scale;
     }
+
+    // === Отслеживание конца перетаскивания гизмо для Undo ===
+    if (gizmoUsing)
+    {
+        m_GizmoWasUsing = true;
+    }
+    else if (m_GizmoWasUsing)
+    {
+        m_GizmoWasUsing = false;
+        RecordUndo();
+    }
 }
-
-
-
-
 
 void EditorUI::DrawCreateObjectDropdown()
 {
@@ -955,15 +968,22 @@ void EditorUI::DrawHierarchy()
 {
     ImGui::Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
 
-    // === Анимированные кнопки вместо обычных ===
     if (AnimatedButton("Save", ImVec2(80, 28), false)) SaveScene();
     ImGui::SameLine();
     if (AnimatedButton("Load", ImVec2(80, 28), false)) LoadScene();
     ImGui::SameLine();
     if (AnimatedButton("+ New", ImVec2(80, 28), true)) CreateCubeEntity();
-    if (AnimatedButton("</>", ImVec2(48, 28), false)) m_ShaderEditor.ToggleVisible();  // <-- ДОБАВИТЬ
 
-    // ============================================
+    // === Undo / Redo кнопки ===
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!CanUndo());
+    if (AnimatedButton("Undo", ImVec2(64, 28), false)) Undo();
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!CanRedo());
+    if (AnimatedButton("Redo", ImVec2(64, 28), false)) Redo();
+    ImGui::EndDisabled();
 
     ImGui::Separator();
 
@@ -1167,9 +1187,6 @@ void EditorUI::DrawInspector()
 
         if (canRemove)
         {
-            
-            
-            
             const float buttonW = ImGui::CalcTextSize("Remove").x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SameLine(ImGui::GetContentRegionMax().x - buttonW);
@@ -1184,7 +1201,10 @@ void EditorUI::DrawInspector()
         if (obj && info)
         {
             for (const auto& prop : info->Properties)
-                PropertyWidgets::Draw(obj, prop);
+            {
+                if (PropertyWidgets::Draw(obj, prop))
+                    m_InspectorPendingRec = true;
+            }
         }
 
         if (entry.Name == "Material" &&
@@ -1193,7 +1213,6 @@ void EditorUI::DrawInspector()
             auto& mc  = m_Registry.get<MaterialComponent>(m_SelectedEntity);
             auto& lib = MaterialLibrary::Get();
 
-            
             const std::string current = lib.IsValid(mc.MaterialId)
                                             ? lib.GetName(mc.MaterialId)
                                             : std::string("(none)");
@@ -1206,7 +1225,10 @@ void EditorUI::DrawInspector()
                 {
                     const bool selected = (mc.MaterialId == i);
                     if (ImGui::Selectable(editData[i].Name.c_str(), selected))
+                    {
                         mc.MaterialId = i;
+                        RecordUndo();
+                    }
                     if (selected)
                         ImGui::SetItemDefaultFocus();
                 }
@@ -1235,6 +1257,14 @@ void EditorUI::DrawInspector()
 
     if (!isCamera && !isSkybox)
         DrawAddComponentMenu();
+
+    // === Отложенная запись Undo: как только пользователь отпустил
+    //     активный слайдер / drag / input — сохраняем состояние сцены. ===
+    if (m_InspectorPendingRec && !ImGui::IsAnyItemActive())
+    {
+        m_InspectorPendingRec = false;
+        RecordUndo();
+    }
 
     ImGui::End();
 }
@@ -1410,6 +1440,8 @@ void EditorUI::CreateEmptyEntity()
     m_SelectedEntity = entity;
     BINAX_LOG_INFO("Created empty entity {0}", (uint32_t)entity);
     Notify(ImGuiToastType_Info, 2000, "Empty entity created");
+
+    RecordUndo();   // <-- ДОБАВИТЬ
 }
 
 void EditorUI::CreateCubeEntity()
@@ -1426,7 +1458,6 @@ void EditorUI::CreateCubeEntity()
     for (auto e : nameView)
     {
         const std::string& n = nameView.get<NameComponent>(e).Name;
-        
         constexpr size_t kPrefixLen = 5;
         if (n.size() <= kPrefixLen)
             continue;
@@ -1455,10 +1486,6 @@ void EditorUI::CreateCubeEntity()
 
     m_Registry.emplace<MeshComponent>(entity, MeshComponent{ cube });
 
-    
-    
-    
-    
     std::string matName = "CubeMaterial_" + std::to_string(nextIndex);
     for (int suffix = 1; MaterialLibrary::Get().Find(matName) != kInvalidMaterial; ++suffix)
         matName = "CubeMaterial_" + std::to_string(nextIndex) + "_" + std::to_string(suffix);
@@ -1480,6 +1507,8 @@ void EditorUI::CreateCubeEntity()
     BINAX_LOG_INFO("Created cube entity {0} at ({1:.2f}, 0, {2:.2f})",
                    (uint32_t)entity, offsetX, offsetZ);
     Notify(ImGuiToastType_Success, 2000, "Cube created");
+
+    RecordUndo();   // <-- ДОБАВИТЬ
 }
 
 entt::entity EditorUI::DuplicateSingle(entt::entity src)
@@ -1549,7 +1578,6 @@ void EditorUI::DuplicateEntity(entt::entity entity)
         return;
     }
 
-    
     const std::vector<entt::entity> subtree = CollectSubtree(entity);
 
     std::unordered_map<entt::entity, entt::entity> remap;
@@ -1562,7 +1590,6 @@ void EditorUI::DuplicateEntity(entt::entity entity)
         remap[src] = DuplicateSingle(src);
     }
 
-    
     for (auto src : subtree)
     {
         const auto dstIt = remap.find(src);
@@ -1584,7 +1611,6 @@ void EditorUI::DuplicateEntity(entt::entity entity)
         m_Registry.get_or_emplace<ParentComponent>(dst).Parent = newParent;
     }
 
-    
     const auto rootIt = remap.find(entity);
     if (rootIt != remap.end())
     {
@@ -1597,6 +1623,8 @@ void EditorUI::DuplicateEntity(entt::entity entity)
     BINAX_LOG_INFO("Duplicated '{0}' with {1} entities",
                    GetEntityName(entity), remap.size());
     Notify(ImGuiToastType_Success, 2000, "Duplicated '%s'", GetEntityName(entity).c_str());
+
+    RecordUndo();   // <-- ДОБАВИТЬ
 }
 
 std::vector<entt::entity> EditorUI::CollectSubtree(entt::entity root) const
@@ -1913,6 +1941,112 @@ void EditorUI::DrawAnimatedHeader(const char* label, bool* open)
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
     ImGui::CollapsingHeader(label, open);   // ImGui сам анимирует через AnimationTime
     ImGui::PopStyleVar();
+}
+
+// ============================================================
+// Undo / Redo
+// ============================================================
+
+std::string EditorUI::CaptureScene() const
+{
+    return SceneSerializer::SerializeToString(
+        const_cast<entt::registry&>(m_Registry));
+}
+
+void EditorUI::ResetUndo()
+{
+    m_UndoStates.clear();
+    m_UndoStates.push_back(CaptureScene());
+    m_UndoCursor = 0;
+}
+
+void EditorUI::RecordUndo()
+{
+    if (m_UndoSuppress)
+        return;
+
+    std::string state = CaptureScene();
+
+    // Не записываем дубликат текущего состояния
+    if (m_UndoCursor >= 0 && m_UndoCursor < (int)m_UndoStates.size())
+    {
+        if (m_UndoStates[m_UndoCursor] == state)
+            return;
+    }
+
+    // Отрезаем "будущее" (redo-ветку)
+    if (m_UndoCursor >= 0 && m_UndoCursor + 1 < (int)m_UndoStates.size())
+        m_UndoStates.erase(m_UndoStates.begin() + m_UndoCursor + 1,
+                           m_UndoStates.end());
+
+    m_UndoStates.push_back(std::move(state));
+    m_UndoCursor = (int)m_UndoStates.size() - 1;
+
+    // Кап истории
+    constexpr size_t kMaxUndoStates = 30;
+    if (m_UndoStates.size() > kMaxUndoStates)
+    {
+        m_UndoStates.erase(m_UndoStates.begin());
+        --m_UndoCursor;
+    }
+}
+
+void EditorUI::RestoreScene(const std::string& state)
+{
+    m_UndoSuppress = true;
+
+    m_SelectedEntity      = entt::null;
+    m_PendingDelete       = entt::null;
+    m_PendingDuplicate    = entt::null;
+    m_GizmoWasUsing       = false;
+    m_InspectorPendingRec = false;
+
+    if (!SceneSerializer::DeserializeFromString(m_Registry, state))
+    {
+        BINAX_LOG_ERROR("Undo/Redo: failed to restore scene state");
+    }
+
+    // Гарантируем наличие системных сущностей
+    {
+        auto v = m_Registry.view<SkyboxComponent>();
+        if (v.begin() == v.end())
+        {
+            auto e = m_Registry.create();
+            m_Registry.emplace<NameComponent>(e, "Skybox");
+            m_Registry.emplace<SkyboxComponent>(e);
+        }
+    }
+    {
+        auto v = m_Registry.view<PostProcessComponent>();
+        if (v.begin() == v.end())
+        {
+            auto e = m_Registry.create();
+            m_Registry.emplace<NameComponent>(e, "PostProcessingCfg");
+            m_Registry.emplace<Transform>(e);
+            m_Registry.emplace<PostProcessComponent>(e);
+            m_Registry.emplace<SystemEntityTag>(e);
+        }
+    }
+
+    m_UndoSuppress = false;
+}
+
+void EditorUI::Undo()
+{
+    if (!CanUndo())
+        return;
+
+    --m_UndoCursor;
+    RestoreScene(m_UndoStates[m_UndoCursor]);
+}
+
+void EditorUI::Redo()
+{
+    if (!CanRedo())
+        return;
+
+    ++m_UndoCursor;
+    RestoreScene(m_UndoStates[m_UndoCursor]);
 }
 
 } 

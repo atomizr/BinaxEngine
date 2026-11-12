@@ -7,9 +7,6 @@
 namespace Binax
 {
 
-
-
-
 class SceneSerializer
 {
 public:
@@ -18,6 +15,11 @@ public:
     static void Serialize(entt::registry& registry, const std::string& filepath);
 
     static bool Deserialize(entt::registry& registry, const std::string& filepath);
+
+    // === Undo/Redo: сериализация в память ===
+    static std::string SerializeToString(entt::registry& registry);
+    static bool DeserializeFromString(entt::registry& registry,
+                                      const std::string& json_string);
 
 private:
     static void SerializeEntity(entt::registry& registry,
