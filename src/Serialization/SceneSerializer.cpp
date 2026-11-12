@@ -57,11 +57,13 @@ void SceneSerializer::Serialize(entt::registry& registry, const std::string& fil
     
     
     std::vector<entt::entity> entities;
-    for (auto entity : registry.view<entt::entity>())
-    {
-        if (!registry.any_of<SystemEntityTag>(entity))
-            entities.push_back(entity);
-    }
+// FIX: registry.view<entt::entity>() невалиден — entity не является компонентом.
+// Используем storage<entt::entity>() для итерации по всем сущностям.
+for (auto entity : registry.storage<entt::entity>())
+{
+    if (!registry.any_of<SystemEntityTag>(entity))
+        entities.push_back(entity);
+}
 
     std::unordered_map<entt::entity, int> ids;
     ids.reserve(entities.size());
@@ -176,11 +178,11 @@ bool SceneSerializer::Deserialize(entt::registry& registry, const std::string& f
     
     
     std::vector<entt::entity> toDestroy;
-    for (auto e : registry.view<entt::entity>())
-    {
-        if (!registry.any_of<SystemEntityTag>(e))
-            toDestroy.push_back(e);
-    }
+for (auto e : registry.storage<entt::entity>())
+{
+    if (!registry.any_of<SystemEntityTag>(e))
+        toDestroy.push_back(e);
+}
     for (auto e : toDestroy)
         registry.destroy(e);
 
