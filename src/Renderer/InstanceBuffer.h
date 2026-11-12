@@ -9,14 +9,16 @@ namespace Binax {
 struct InstanceGPU
 {
     glm::mat4 Model;
-    
     glm::mat4 PrevModel;
+    glm::mat4 NormalMatrix;   // NEW: нормальная матрица для вершинного шейдера
     uint32_t  MaterialId = 0;
     uint32_t  MeshId     = 0;
     uint32_t  BoneOffset = 0;
     uint32_t  Flags      = 0;
 };
-static_assert(sizeof(InstanceGPU) == 144, "InstanceGPU must be 144 bytes");
+
+// FIX: 64 + 64 + 64 + 16 = 208
+static_assert(sizeof(InstanceGPU) == 208, "InstanceGPU must be 208 bytes");
 
 namespace InstanceFlags {
     enum : uint32_t { None = 0u, Skinned = 1u << 0 };
