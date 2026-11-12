@@ -1,7 +1,9 @@
+# Папки сборки
 build/
 out/
 cmake-build-*/
 
+# IDE и файлы проектов
 .vs/
 .vscode/
 .idea/
@@ -10,9 +12,14 @@ cmake-build-*/
 *.sln
 *.vcxproj*
 
+# Бинарники и временные файлы компиляции
 *.exe
 *.dll
 *.lib
 *.obj
 *.pdb
 *.ilk
+
+# Локальные скрипты
+*.bat
+*.pyw
