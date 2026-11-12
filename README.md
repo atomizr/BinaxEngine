@@ -18,7 +18,7 @@
 
 **Binax Engine** is a game engine and scene editor being developed from scratch in **C++20** using **OpenGL 4.6 Core**. The project serves as a hands-on learning and experimentation platform for studying the internals of modern graphics engines — from deferred rendering and PBR to GPU-driven rendering and ECS architecture.
 
-The engine includes a full-featured editor with a scene hierarchy, component inspector, gizmos, material editor, in-editor shader editor with live reload, and JSON serialization.
+The engine includes a full-featured editor with a scene hierarchy, component inspector, gizmos, material editor, in-editor shader editor with live reload, embedded console, object picking, multi-selection, undo/redo, and JSON serialization.
 
 > ⚠️ The project is under active development. APIs and file formats may change without backward compatibility.
 
@@ -34,6 +34,7 @@ The engine includes a full-featured editor with a scene hierarchy, component ins
   - Compute-shader frustum culling **at the instance-group level** (one workgroup per draw-group, one indirect draw per surviving group).
   - Indirect draws (`glMultiDrawElementsIndirectCount`).
   - Instancing with SSBOs for instances, materials, meshes, and per-group draw templates.
+- **Selection outline** — screen-space dilate around the selected object(s); shares G-Buffer depth for correct occlusion, so the outline never bleeds through walls. Group outline draws a single border around the entire selection.
 - **Skybox** based on a cubemap with rotation and adjustable brightness.
 - **Post-processing**:
   - Tonemapping: ACES, Reinhard, Filmic, AgX, Linear.
@@ -53,6 +54,7 @@ The engine includes a full-featured editor with a scene hierarchy, component ins
   - Scene (`.bxlvl`)
   - Materials (`.bxmat`)
   - Post-processing (`.bxdata`)
+- **Snapshot-based Undo/Redo** — serializes the whole scene to JSON on every edit; 30-state history, automatic pruning on new branch.
 
 ### Editor
 - **Modern dark theme** — rounded corners, OKLAB-based color interpolation for smooth state transitions.
@@ -64,14 +66,18 @@ The engine includes a full-featured editor with a scene hierarchy, component ins
 - **Scene hierarchy** with drag-and-drop, search, entity creation, deletion, and duplication.
 - **Inspector** powered by reflection — automatic widgets for all registered components.
 - **Viewport with gizmos** ([ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo)): translate, rotate, scale with grid snapping.
+- **Object picking** — click any mesh in the viewport to select it. Uses the G-Buffer position texture (no CPU-side raycasts), so clicking through walls correctly picks only visible pixels.
+- **Multi-selection** — `Shift + Click` in the viewport or hierarchy adds/removes entities to the selection. Outline is drawn around the whole group; gizmo operates on the primary (last-clicked) object.
+- **Undo / Redo** — `Ctrl + Z` (undo), `Ctrl + Y` / `Ctrl + Shift + Z` (redo). Wired into entity create/delete/duplicate, add/remove component, reparent, gizmo drags, and inspector edits.
 - **Material editor** — edit PBR parameters and assign textures via the built-in file browser.
 - **In-editor shader editor** — tabbed GLSL/HLSL editor with syntax highlighting, auto-indentation, and full undo/redo:
   - Save → automatically triggers `DeferredRenderer::ReloadShaders()`, so changes are visible in the viewport immediately.
   - Reload discards local edits and re-reads from disk.
   - Scans `shaders/` every 2 s for new files.
   - Supports `.vert`, `.frag`, `.comp`, `.geom`, `.tesc`, `.tese`, `.glsl`.
+- **Embedded console** — in-editor log panel fed by a custom `spdlog` sink (ring buffer of 8192 entries). Filter by level (`Trace` … `Critical`), full-text search, auto-scroll. Toggled with **`~`** (grave). The native Win32 console window is hidden at startup; all logs go to `debug.log` and to the embedded console.
 - **Toast notifications** ([imgui-notify](https://github.com/patrickcjk/imgui-notify) + Font Awesome 5 icons) — non-intrusive feedback for Save / Load / Delete / Duplicate / Add / Remove.
-- **Stats panel** — FPS, frame time, draw calls, vertices, triangles, instances, visible/culled instances, GPU culling and post-processing state.
+- **Stats overlay** — click the `Stats` button in the viewport toolbar to pin a semi-transparent Stats panel to the viewport's top-right corner. Shows FPS, frame time, GPU culling state, draw calls, vertices, triangles, visible/culled instances, TAA / PostFX state, mesh / material / instance counts.
 - **Hot shader reloading.**
 - One-click scene save/load.
 
@@ -114,6 +120,44 @@ The engine includes a full-featured editor with a scene hierarchy, component ins
   - `Delete` / `Duplicate` / `Add Component` / `Remove Component` → info toasts.
   - All toasts are forced on top via `BringWindowToDisplayFront` (without stealing focus), so they're never covered by docked panels.
 
+### Selection & Picking
+- **Object picking in viewport** — click any visible mesh to select it.
+  - Reads world position from the G-Buffer's `POSITION` attachment at the clicked pixel (`glReadPixels`).
+  - Searches instances for a local-space AABB hit, returns the matching entity.
+  - Skipped when the click is over the gizmo (`ImGuizmo::IsOver()`), over a Stats overlay, over text input, or on the sky. No CPU-side raycast — the depth buffer already filters occluded pixels.
+- **Multi-selection** (`Shift + Click`):
+  - Viewport clicks and hierarchy clicks both support Shift for toggle.
+  - `EditorUI::SelectOnly` / `ToggleSelect` / `ClearSelection` manage a `std::unordered_set<entt::entity>` alongside the primary `m_SelectedEntity`.
+  - **Group outline**: `RenderOutlinePass` accepts the full selection, draws the mask of every selected entity into a single FBO, then the pixel-space dilate in `lighting.frag` produces a single outline around the whole group (no internal borders between adjacent selected objects).
+- **Selection outline (screen-space)**:
+  - `RenderOutlinePass` renders selected meshes into a dedicated FBO, sharing G-Buffer depth for correct occlusion (`glFramebufferTexture2D(..., GL_DEPTH_STENCIL_ATTACHMENT, ...)`).
+  - `OutlineComposite` in `lighting.frag` does a radius-2 circular dilate with `GL_NEAREST` sampling — stable thickness in **pixels**, no artifacts on cube edges, no dropouts at grazing angles.
+  - Applied in both the sky branch and the standard lighting branch, so the outline works even when the selected object floats in the sky.
+  - `glPolygonOffset(-1, -1)` during mask render eliminates z-fighting between coplanar geometry.
+
+### Undo / Redo
+- **Snapshot-based history** (`Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z`):
+  - `SceneSerializer::SerializeToString` / `DeserializeFromString` reuse the existing JSON pipeline.
+  - 30-state history with automatic pruning of the redo branch.
+  - Hooked into: entity create/delete/duplicate, add/remove component, reparent, gizmo drags (recorded once on release), inspector widget edits (recorded when the active item is released), material asset swap.
+  - `ResetUndo()` on `LoadScene` — new scene, new history.
+  - `Ctrl+Z` inside the Shader Editor goes to the `TextEditor`'s own undo, not to the scene (because `WantTextInput` is checked first).
+
+### Console
+- **Embedded log console** (`src/Editor/Console.{h,cpp}` + `src/Utils/LogSink.h`):
+  - Custom `spdlog::sinks::base_sink<std::mutex>` that keeps a ring buffer of 8192 entries.
+  - Registered as an extra sink in `Log::Init()` alongside stdout and `debug.log`.
+  - Filter by level (`Trace` / `Debug` / `Info` / `Warn` / `Error` / `Critical`), full-text case-insensitive search, auto-scroll.
+  - Toggled with **`~`** (grave).
+  - **Win32 cmd window is hidden** at startup (`ShowWindow(GetConsoleWindow(), SW_HIDE)`), so the only console the user sees is the in-editor one.
+
+### Stats Overlay
+- **Button in viewport toolbar** (top-right) pins the Stats window to the viewport's top-right corner.
+  - Repositioned **every frame** via `SetNextWindowPos(ImGuiCond_Always)` — the overlay follows the viewport on resize.
+  - Semi-transparent background (`SetNextWindowBgAlpha(0.92f)`).
+  - Raised above other panels via `BringWindowToDisplayFront(GetCurrentWindow())` — but without stealing focus (unlike `BringWindowToFocusFront`).
+  - Closing via the X resets the toggle in `EditorUI` so the button state stays in sync.
+
 ### Shader Editor
 - **In-editor shader editing** (`src/Editor/ShaderEditor.{h,cpp}`):
   - Scans `shaders/` every 2 s.
@@ -137,6 +181,9 @@ The following issues were found during code review passes and fixed. They are no
 - **Post-process `Enabled` toggle didn't disable tonemapping.** With `PostProcessComponent::Enabled == false`, the renderer still ran `ApplyTonemap` with `TonemapMode = 0 (ACES)`. `GatherPostProcessSettings` now returns `TonemapMode::Linear` by default, so disabling post-processing actually produces a passthrough image.
 - **FXAA mutated the LDR FBO's texture filter.** `ApplyFXAA` called `glTexParameteri(..., GL_LINEAR)` on the LDR color attachment every frame — a global side effect on the FBO. The filter is now set once in `EnsurePostTargets` after (re)creation.
 - **TAA / Motion Blur: stale `m_PrevJitter` after resize.** `m_PrevJitter` is now reset to zero on resize, matching TAA history and `m_HasPrevViewProj`.
+- **Outline: inflated-silhouette artifacts.** The first outline implementation used vertex inflation (`pos + normal * thickness`) and stencil. On cube edges the three vertex normals diverge → torn outline; at grazing angles the projected thickness dropped below 1 px → outline disappeared. Rewritten to screen-space dilate in `lighting.frag` with a solid-object mask in a separate FBO. Fixed thickness in **pixels**, stable everywhere.
+- **Outline: z-fighting against coplanar geometry.** Outline mask is rendered with `glPolygonOffset(-1, -1)` and depth shared from the G-Buffer, so coplanar surfaces no longer flicker.
+- **Outline: invisible around objects in the sky.** `lighting.frag` has an early return for sky pixels (`dot(Nraw, Nraw) < 1e-4`), which skipped the outline composite. `OutlineComposite` is now called in both branches.
 
 ### Editor
 - **Font loading: latent double-free.** `ImFontAtlas::AddFontFromMemoryTTF` always takes ownership of the memory buffer, even when font parsing fails. The `else` branch in `LoadEditorFont` called `std::free(buf)` on the (now owned) buffer — a double-free waiting to happen. The branch no longer frees the buffer.
@@ -144,6 +191,8 @@ The following issues were found during code review passes and fixed. They are no
 - **Toasts rendered below docked panels.** `ImGuiWindowFlags_NoBringToFrontOnFocus` prevented toasts from appearing above other windows. `BringWindowToDisplayFront(GetCurrentWindow())` is now called after `Begin()` — toasts stay on top while still not stealing keyboard focus.
 - **`ImGuiStyle::AnimTime` / `AnimationTime` no longer exists** in recent ImGui — the line was removed; `CollapsingHeader` animation is handled internally by ImGui 1.92+.
 - **`ImGui::PushItemFlag` / `ImGuiItemFlags_NoTabStop` need `imgui_internal.h`** — added the include to `TextEditor.cpp`.
+- **`imgui_notify.h` requires `<imgui.h>` before itself.** Self-contained header now includes `<imgui.h>` and `<imgui_internal.h>` at the top, so it can be included from anywhere in the project.
+- **`PushItemFlag` in `TextEditor.cpp` on ImGui 1.92+** — the function moved to `imgui_internal.h`; added the include.
 
 ### Minor
 - **`DrawState` initialisation** updated to 4 × `uint32_t` to match the new `visibleInstanceCount` field.
@@ -155,6 +204,10 @@ The following issues were found during code review passes and fixed. They are no
 
 The project is actively evolving. Upcoming features include:
 
+### 🎮 Gameplay / runtime
+- **Play / Pause / Stop mode** — clone the registry into a runtime world via `SceneSerializer::SerializeToString`, play, restore on Stop. Play / Stop is essentially free now that snapshot serialization exists.
+- **Input actions** — abstract "Jump" / "Fire" from raw `GLFW_KEY_*`.
+
 ### 🔦 Shadows
 - Shadows from directional and point lights.
 - Cascaded Shadow Maps (CSM) for directional light.
@@ -165,6 +218,14 @@ The project is actively evolving. Upcoming features include:
 - BRDF LUT for PBR lighting.
 - Integration with the scene skybox.
 
+### 🌫️ Transparency / Forward pass
+- Sorted forward pass after deferred for glass, water, particles, foliage.
+- Blending modes per material.
+
+### 🌑 SSAO
+- Screen-space ambient occlusion from G-Buffer position + normal.
+- Blur pass and composite in `lighting.frag`.
+
 ### 🌫️ Particle System
 - GPU-driven particle system with emitters and modulators.
 - Support for various particle types (sprites, meshes).
@@ -173,22 +234,22 @@ The project is actively evolving. Upcoming features include:
 ### ⚙️ Physics — Jolt Physics
 - Integration of [Jolt Physics](https://github.com/jrouwe/JoltPhysics).
 - `RigidBody`, `Collider`, `CharacterController` components.
-- ECS ↔ physics world transform synchronization.
+- ECS ↔ physics world transform sync.
 
 ### 🔊 Audio — miniaudio
 - Integration of [miniaudio](https://github.com/mackron/miniaudio) as the audio backend.
 - `AudioSource` (2D/3D) and `AudioListener` components.
-- Support for WAV/MP3/FLAC and streaming.
+- WAV/MP3/FLAC support and streaming.
 
 ### 🧊 Model Import — Assimp
-- Integration of [Assimp](https://github.com/assimp/assimp) for importing popular formats (glTF, FBX, OBJ, DAE, etc.).
+- Integration of [Assimp](https://github.com/assimp/assimp) for glTF / FBX / OBJ / DAE.
 - Skeletal animation support.
 - Automatic material creation from imported data.
 
 ### 🐍 Scripting — Lua
-- Embedding [Lua](https://www.lua.org/) (via [sol2](https://github.com/ThePhD/sol2)) as the scripting language.
-- `ScriptComponent` with entity lifecycle hooks (`OnCreate`, `OnUpdate`, `OnDestroy`).
-- API for ECS, input, transforms, and audio access.
+- Embedding [Lua](https://www.lua.org/) (via [sol2](https://github.com/ThePhD/sol2)).
+- `ScriptComponent` with `OnCreate` / `OnUpdate` / `OnDestroy`.
+- API for ECS, input, transforms, audio.
 
 ### Rendering pipeline (upcoming)
 - **Per-instance GPU culling via stream compaction** — moving towards fully GPU-driven MDI.
@@ -198,10 +259,14 @@ The project is actively evolving. Upcoming features include:
 - Potential Vulkan backend.
 
 ### Editor (upcoming)
-- Undo / redo for the scene editor.
-- Asset browser with thumbnails.
-- Material graphs (node-based authoring).
-- Custom shader editor themes (currently the dark `TextEditor` palette).
+- **Marquee selection** — LMB drag over empty space paints a rectangle, all meshes inside get selected.
+- **Hover-preview** — hover highlight of the object under the cursor (using the same G-Buffer pick).
+- **Group transform** — gizmo moves/rotates/scales the whole multi-selection, not just the primary.
+- **Camera bookmarks** — `Ctrl+1..9` saves, `Alt+1..9` jumps.
+- **Prefab system** — save a subtree as a reusable asset, instantiate with drag-drop.
+- **Content browser** with thumbnails for materials / textures / shaders.
+- **Undo / redo improvements** — use `EditorState` instead of full-scene snapshots for very large scenes, so each edit is <1 ms.
+- **Material graphs** — node-based authoring.
 
 ### Other
 - Cross-platform builds (Windows / Linux).
@@ -238,11 +303,11 @@ BinaxEngine/
 │   ├── Core/            # Window, input, timer
 │   ├── ECS/             # Components and systems (EnTT)
 │   ├── Editor/          # Editor: UI, viewport, camera, gizmos,
-│   │                    #         TextEditor, ShaderEditor
+│   │                    #         TextEditor, ShaderEditor, Console
 │   ├── Reflect/         # Component reflection system
 │   ├── Renderer/        # Renderer, materials, shaders, meshes, ImAnim
 │   ├── Serialization/   # JSON serialization for scene/materials
-│   ├── Utils/           # Logging, paths, file I/O
+│   ├── Utils/           # Logging, paths, file I/O, LogSink
 │   └── main.cpp
 ├── resources/
 │   ├── fonts/           # Editor fonts + Font Awesome
@@ -269,7 +334,11 @@ BinaxEngine/
 | Duplicate | Ctrl + D |
 | Delete | Delete |
 | Search in hierarchy | Ctrl + F |
-| **Open Shader Editor** | **F4** |
+| Undo | Ctrl + Z |
+| Redo | Ctrl + Y / Ctrl + Shift + Z |
+| Multi-select (toggle) | Shift + LMB (viewport or hierarchy) |
+| Open Shader Editor | F4 |
+| Open Console | ` (grave) |
 | Exit | Esc |
 
 ---
@@ -302,6 +371,7 @@ Huge thanks to the authors of the libraries and projects the engine is built upo
 - **imgui-notify** — for lightweight, unobtrusive toast notifications.
 - **Font Awesome** — for the icon set embedded in the editor.
 - **ImGuiColorTextEdit** — for the `TextEditor` foundation used by the shader editor.
+- **spdlog** — for the logging foundation and the custom sink pipeline.
 - **OpenGL** community — for shader techniques and GPU-driven rendering articles.
 - **LearnOpenGL** and **The Book of Shaders** — for educational materials.
 
@@ -311,5 +381,3 @@ Huge thanks to the authors of the libraries and projects the engine is built upo
   <i>Made with ❤️ for graphics and game dev.</i>
 </p>
 ```
-
----
