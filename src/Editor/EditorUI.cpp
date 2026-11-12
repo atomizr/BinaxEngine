@@ -297,6 +297,7 @@ void EditorUI::DeleteEntity(entt::entity entity)
         if (m_Registry.any_of<SystemEntityTag>(e) || IsProtectedEntity(e))
             continue;
 
+        m_SelectedEntities.erase(e);
         if (m_SelectedEntity == e)
             m_SelectedEntity = entt::null;
 
@@ -803,7 +804,12 @@ void EditorUI::DrawViewport()
             if (uv.x >= 0.0f && uv.x <= 1.0f &&
                 uv.y >= 0.0f && uv.y <= 1.0f)
             {
-                m_SelectedEntity = m_PickCallback(uv);
+                const entt::entity picked = m_PickCallback(uv);
+
+                if (ImGui::GetIO().KeyShift)
+                    ToggleSelect(picked);       // Shift+Click → toggle в наборе
+                else
+                    SelectOnly(picked);         // обычный клик → заменить набор
             }
         }
     }
@@ -1040,8 +1046,14 @@ void EditorUI::DrawHierarchy()
 
             anyMatch = true;
             ImGui::PushID(static_cast<int>(entity));
-            if (ImGui::Selectable(name.c_str(), m_SelectedEntity == entity))
-                m_SelectedEntity = entity;
+            const bool isSelected = (m_SelectedEntities.count(entity) != 0);
+            if (ImGui::Selectable(name.c_str(), isSelected))
+            {
+                if (ImGui::GetIO().KeyShift)
+                    ToggleSelect(entity);
+                else
+                    SelectOnly(entity);
+            }
             ImGui::PopID();
         }
 
@@ -1119,7 +1131,7 @@ void EditorUI::DrawEntityRow(
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
                                ImGuiTreeNodeFlags_SpanAvailWidth |
                                ImGuiTreeNodeFlags_DefaultOpen;
-    if (m_SelectedEntity == entity)
+    if (m_SelectedEntities.count(entity))
         flags |= ImGuiTreeNodeFlags_Selected;
     if (!hasChildren)
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
@@ -1130,7 +1142,12 @@ void EditorUI::DrawEntityRow(
                                         GetEntityName(entity).c_str());
 
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-        m_SelectedEntity = entity;
+    {
+        if (ImGui::GetIO().KeyShift)
+            ToggleSelect(entity);
+        else
+            SelectOnly(entity);
+    }
 
     
     if (!isProtected && ImGui::BeginDragDropSource())
@@ -1460,7 +1477,7 @@ void EditorUI::CreateEmptyEntity()
     m_Registry.emplace<Transform>(entity);
     m_Registry.emplace<NameComponent>(entity,
         "Entity " + std::to_string((uint32_t)entity));
-    m_SelectedEntity = entity;
+        SelectOnly(entity);
     BINAX_LOG_INFO("Created empty entity {0}", (uint32_t)entity);
     Notify(ImGuiToastType_Info, 2000, "Empty entity created");
 
@@ -2052,6 +2069,44 @@ void EditorUI::RestoreScene(const std::string& state)
     }
 
     m_UndoSuppress = false;
+}
+
+// ============================================================
+// Multi-selection helpers
+// ============================================================
+void EditorUI::SelectOnly(entt::entity e)
+{
+    m_SelectedEntities.clear();
+    if (e != entt::null && m_Registry.valid(e))
+        m_SelectedEntities.insert(e);
+    m_SelectedEntity = (m_SelectedEntities.empty()) ? entt::null : e;
+}
+
+void EditorUI::ToggleSelect(entt::entity e)
+{
+    if (e == entt::null || !m_Registry.valid(e))
+        return;
+
+    auto it = m_SelectedEntities.find(e);
+    if (it != m_SelectedEntities.end())
+    {
+        m_SelectedEntities.erase(it);
+        if (m_SelectedEntity == e)
+            m_SelectedEntity = m_SelectedEntities.empty()
+                                   ? entt::null
+                                   : *m_SelectedEntities.begin();
+    }
+    else
+    {
+        m_SelectedEntities.insert(e);
+        m_SelectedEntity = e;   // новый primary
+    }
+}
+
+void EditorUI::ClearSelection()
+{
+    m_SelectedEntities.clear();
+    m_SelectedEntity = entt::null;
 }
 
 void EditorUI::Undo()

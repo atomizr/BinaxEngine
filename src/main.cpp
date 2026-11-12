@@ -587,13 +587,17 @@ int main()
                           editorCamera.GetProjectionMatrix());
 
     // === Outline выделенного объекта ===
-    renderer.RenderOutlinePass(
-        frameData,
-        editorUI.GetSelectedEntity(),
-        editorCamera.GetViewMatrix(),
-        editorCamera.GetProjectionMatrix(),
-        (uint32_t)viewport.GetSize().x,
-        (uint32_t)viewport.GetSize().y);
+    {
+        const auto& selSet = editorUI.GetSelectedEntities();
+        std::vector<entt::entity> selVec(selSet.begin(), selSet.end());
+        renderer.RenderOutlinePass(
+            frameData,
+            selVec,
+            editorCamera.GetViewMatrix(),
+            editorCamera.GetProjectionMatrix(),
+            (uint32_t)viewport.GetSize().x,
+            (uint32_t)viewport.GetSize().y);
+    }
     // ===================================
 
     collectedLights.clear();

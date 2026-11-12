@@ -149,7 +149,7 @@ public:
     void ReloadShaders();
 
     void RenderOutlinePass(const FrameRenderData& frame,
-                           entt::entity selectedEntity,
+                           const std::vector<entt::entity>& selectedEntities,
                            const glm::mat4& viewMatrix,
                            const glm::mat4& projectionMatrix,
                            uint32_t width, uint32_t height);
