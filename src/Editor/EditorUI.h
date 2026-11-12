@@ -11,6 +11,10 @@
 #include "Renderer/MaterialLibrary.h"
 #include "Renderer/MeshLibrary.h"
 
+// ВАЖНО: "imgui_notify.h" здесь НЕ подключаем.
+// Он требует <imgui.h> до себя, а он будет подключён в .cpp.
+// ImGuiToastType — это typedef int, поэтому в объявлении используем int.
+
 struct GLFWwindow;
 
 namespace Binax {
@@ -28,9 +32,6 @@ public:
     void SetViewport(Viewport* viewport)   { m_Viewport  = viewport;  }
     bool IsViewportHovered() const         { return m_ViewportHovered; }
 
-    
-    
-    
     void SyncViewportSize();
 
     void SetCameraMatrices(const glm::mat4& view, const glm::mat4& projection)
@@ -43,11 +44,14 @@ public:
     bool IsGizmoUsing() const;
     bool IsGizmoHovered() const;
 
+    // Всплывающие уведомления. ImGuiToastType = int (typedef в imgui_notify.h),
+    // поэтому здесь int — совместимо с ImGuiToastType_Success и т.д.
+    void Notify(int type, int dismissMs, const char* format = nullptr, ...);
+
 private:
     entt::registry& m_Registry;
     entt::entity m_SelectedEntity = entt::null;
-    
-    
+
     entt::entity m_PendingDelete = entt::null;
     entt::entity m_PendingDuplicate = entt::null;
     std::vector<std::function<void()>> m_ExtraPanelDrawers;
@@ -57,7 +61,6 @@ private:
     bool m_ShowInspector = true;
     bool m_ViewportHovered = false;
 
-    
     char m_HierarchySearch[128] = {};
     bool m_FocusSearch = false;
 
@@ -66,9 +69,6 @@ private:
     int m_GizmoOperation = 0;
     int m_GizmoMode = 0;
 
-    
-    
-    
     bool  m_SnapEnabled   = false;
     float m_SnapTranslate = 0.5f;
     float m_SnapRotate    = 15.0f;
@@ -79,16 +79,12 @@ private:
     float m_ViewportScreenW = 0.0f;
     float m_ViewportScreenH = 0.0f;
 
-    
-    
     float m_PendingViewportW = 0.0f;
     float m_PendingViewportH = 0.0f;
 
-    
     MaterialHandle m_EditingMaterial = kInvalidMaterial;
     bool           m_ShowMaterialEditor = false;
 
-    
     void DrawHierarchy();
     void DrawInspector();
     void DrawViewport();
@@ -97,7 +93,6 @@ private:
     void DrawCreateObjectDropdown();
     void DrawMaterialEditor();
 
-    
     void DrawEntityRow(entt::entity entity,
                        const std::unordered_map<entt::entity, std::vector<entt::entity>>& children,
                        std::unordered_set<entt::entity>& visited);
@@ -105,17 +100,13 @@ private:
     bool IsDescendantOf(entt::entity candidate, entt::entity ancestor) const;
     std::vector<entt::entity> CollectSubtree(entt::entity root) const;
 
-    
     float& SnapStep();
 
-    
     void FocusOnSelection();
 
-    
     std::string MakeUniqueName(const std::string& sourceName) const;
     bool IsNameTaken(const std::string& name) const;
 
-    
     void CreateEmptyEntity();
     void CreateCubeEntity();
     void InitComponentFactory();
@@ -130,12 +121,12 @@ private:
     void LoadScene();
 
     bool IsEditorCamera(entt::entity entity) const;
-    
-    
     bool IsProtectedEntity(entt::entity entity) const;
     std::string GetEntityName(entt::entity entity) const;
 
-    void ApplyQtGrayStyle();
+    // ВАЖНО: имя метода должно совпадать с определением в .cpp.
+    // У тебя было объявлено ApplyQtGrayStyle, а определено ApplyModernDarkStyle.
+    void ApplyModernDarkStyle();
     void LoadEditorFont();
 };
 

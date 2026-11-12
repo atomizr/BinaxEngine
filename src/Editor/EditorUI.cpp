@@ -40,9 +40,11 @@
 #include "Serialization/PropertySerializer.h"
 #include "Utils/FileIO.h"
 #include "Utils/Paths.h"
+#include "imgui_notify.h"
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <cstdarg>
 
 namespace {
 
@@ -79,7 +81,7 @@ EditorUI::EditorUI(GLFWwindow* window, entt::registry& registry)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigWindowsMoveFromTitleBarOnly = true;
 
-    ApplyQtGrayStyle();
+    ApplyModernDarkStyle();   // <-- БЫЛО ApplyQtGrayStyle()
     LoadEditorFont();
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -136,6 +138,7 @@ void EditorUI::AddComponentToEntity(entt::entity entity, const std::string& comp
     }
     entry->AddDefault(m_Registry, entity);
     BINAX_LOG_INFO("Added '{}' to entity {}", componentName, (uint32_t)entity);
+    Notify(ImGuiToastType_Success, 2000, "Added '%s'", componentName.c_str());
 }
 
 void EditorUI::RemoveComponentFromEntity(entt::entity entity, const std::string& componentName)
@@ -168,17 +171,14 @@ void EditorUI::RemoveComponentFromEntity(entt::entity entity, const std::string&
 
     entry->Remove(m_Registry, entity);
     BINAX_LOG_INFO("Removed '{}' from entity {}", componentName, (uint32_t)entity);
+    Notify(ImGuiToastType_Info, 2000, "Removed '%s'", componentName.c_str());
 }
-
 
 
 
 
 void EditorUI::SaveScene()
 {
-    
-    
-    
     const std::string materialDir = Paths::Resolve(AssetFiles::kMaterialsDir);
     const std::string levelPath   = Paths::Resolve(AssetFiles::kLevelFile);
     const std::string ppPath      = Paths::Resolve(AssetFiles::kPostProcessFile);
@@ -186,6 +186,9 @@ void EditorUI::SaveScene()
     MaterialSerializer::SaveAll(MaterialLibrary::Get(), materialDir);
     SceneSerializer::Serialize(m_Registry, levelPath);
     PostProcessSerializer::Save(m_Registry, ppPath);
+
+    // === НОВОЕ ===
+    Notify(ImGuiToastType_Success, 3000, "Scene saved");
 }
 
 void EditorUI::LoadScene()
@@ -203,23 +206,23 @@ void EditorUI::LoadScene()
     if (!std::filesystem::exists(Paths::FromUtf8(levelPath), ec) || ec)
     {
         BINAX_LOG_WARN("Level file not found: {}", levelPath);
+        Notify(ImGuiToastType_Error, 3500, "Level file not found");
         return;
     }
 
-    
     MaterialSerializer::LoadAll(MaterialLibrary::Get(), materialDir);
 
     if (!SceneSerializer::Deserialize(m_Registry, levelPath))
     {
         BINAX_LOG_WARN("Level load failed — the registry may be partially updated");
+        Notify(ImGuiToastType_Error, 3500, "Failed to load level");
         return;
     }
 
-    
     if (std::filesystem::exists(Paths::FromUtf8(ppPath), ec) && !ec)
         PostProcessSerializer::Load(m_Registry, ppPath);
 
-    
+    // --- Skybox ---
     {
         auto skyView = m_Registry.view<SkyboxComponent>();
         if (skyView.begin() == skyView.end())
@@ -231,8 +234,7 @@ void EditorUI::LoadScene()
         }
     }
 
-    
-    
+    // --- PostProcess ---
     {
         auto ppView = m_Registry.view<PostProcessComponent>();
         if (ppView.begin() == ppView.end())
@@ -247,6 +249,9 @@ void EditorUI::LoadScene()
     }
 
     BINAX_LOG_INFO("Level loaded");
+
+    // === НОВОЕ ===
+    Notify(ImGuiToastType_Success, 3000, "Level loaded");
 }
 
 
@@ -255,33 +260,29 @@ void EditorUI::LoadScene()
 
 void EditorUI::DeleteEntity(entt::entity entity)
 {
-    
-    
     if (!m_Registry.valid(entity))
     {
         BINAX_LOG_WARN("Entity {0} is not valid", (uint32_t)entity);
+        Notify(ImGuiToastType_Warning, 2500, "Invalid entity");
         return;
     }
     if (m_Registry.any_of<SystemEntityTag>(entity))
     {
         BINAX_LOG_WARN("Cannot delete system entity (tagged SystemEntityTag)");
+        Notify(ImGuiToastType_Warning, 2500, "Cannot delete system entity");
         return;
     }
-    
-    
-    
-    
     if (IsProtectedEntity(entity))
     {
         BINAX_LOG_WARN("Cannot delete system entity (camera / skybox / post-process)");
+        Notify(ImGuiToastType_Warning, 2500, "Protected entity");
         return;
     }
 
-    BINAX_LOG_INFO("Deleting entity {0} (name: {1})",
-                   (uint32_t)entity, GetEntityName(entity));
+    const std::string name = GetEntityName(entity);
 
-    
-    
+    BINAX_LOG_INFO("Deleting entity {0} (name: {1})", (uint32_t)entity, name);
+
     const std::vector<entt::entity> subtree = CollectSubtree(entity);
 
     uint32_t destroyed = 0;
@@ -301,28 +302,9 @@ void EditorUI::DeleteEntity(entt::entity entity)
 
     BINAX_LOG_INFO("Entity {0} destroyed (with subtree: {1} entities)",
                    (uint32_t)entity, destroyed);
-}
 
-std::vector<entt::entity> EditorUI::CollectSubtree(entt::entity root) const
-{
-    std::vector<entt::entity> out;
-    if (!m_Registry.valid(root))
-        return out;
-
-    out.push_back(root);
-    std::unordered_set<entt::entity> seen{ root };
-
-    for (size_t i = 0; i < out.size(); ++i)
-    {
-        auto view = m_Registry.view<ParentComponent>();
-        for (auto e : view)
-        {
-            if (view.get<ParentComponent>(e).Parent == out[i] && seen.insert(e).second)
-                out.push_back(e);
-        }
-    }
-
-    return out;
+    // === НОВОЕ ===
+    Notify(ImGuiToastType_Info, 2500, "Deleted '%s'", name.c_str());
 }
 
 bool EditorUI::IsDescendantOf(entt::entity candidate, entt::entity ancestor) const
@@ -410,6 +392,7 @@ void EditorUI::SetParent(entt::entity child, entt::entity parent)
     BINAX_LOG_INFO("Reparented '{0}' -> '{1}'",
                    GetEntityName(child),
                    (parent == entt::null) ? std::string("<root>") : GetEntityName(parent));
+    Notify(ImGuiToastType_Info, 2000, "Reparented");
 }
 
 bool EditorUI::IsEditorCamera(entt::entity entity) const
@@ -550,6 +533,9 @@ void EditorUI::FocusOnSelection()
                    (m_SelectedEntity == entt::null)
                        ? std::string("<origin>")
                        : GetEntityName(m_SelectedEntity));
+    Notify(ImGuiToastType_Info, 1500, "Camera focused on '%s'",
+       (m_SelectedEntity == entt::null) ? "<origin>"
+                                        : GetEntityName(m_SelectedEntity).c_str());
 }
 
 bool EditorUI::IsNameTaken(const std::string& name) const
@@ -601,7 +587,6 @@ std::string EditorUI::MakeUniqueName(const std::string& sourceName) const
 
 
 
-
 void EditorUI::Draw()
 {
     ImGui_ImplOpenGL3_NewFrame();
@@ -624,13 +609,33 @@ void EditorUI::Draw()
     for (auto& cb : m_ExtraPanelDrawers)
         if (cb) cb();
 
+    // === НОВОЕ: рисуем всплывающие уведомления (правый нижний угол) ===
+    ImGui::RenderNotifications();
+
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
+void EditorUI::Notify(int type, int dismissMs, const char* format, ...)
+{
+    char buffer[NOTIFY_MAX_MSG_LENGTH] = {};
 
+    if (format)
+    {
+        va_list args;
+        va_start(args, format);
+        vsnprintf(buffer, sizeof(buffer), format, args);
+        va_end(args);
+    }
 
+    // ImGuiToastType — это typedef int, поэтому cast не нужен, но для ясности:
+    const ImGuiToastType toastType = static_cast<ImGuiToastType>(type);
 
+    if (buffer[0] != '\0')
+        ImGui::InsertNotification(ImGuiToast(toastType, dismissMs, "%s", buffer));
+    else
+        ImGui::InsertNotification(ImGuiToast(toastType, dismissMs));
+}
 
 void EditorUI::SyncViewportSize()
 {
@@ -1384,6 +1389,7 @@ void EditorUI::CreateEmptyEntity()
         "Entity " + std::to_string((uint32_t)entity));
     m_SelectedEntity = entity;
     BINAX_LOG_INFO("Created empty entity {0}", (uint32_t)entity);
+    Notify(ImGuiToastType_Info, 2000, "Empty entity created");
 }
 
 void EditorUI::CreateCubeEntity()
@@ -1453,6 +1459,7 @@ void EditorUI::CreateCubeEntity()
     m_SelectedEntity = entity;
     BINAX_LOG_INFO("Created cube entity {0} at ({1:.2f}, 0, {2:.2f})",
                    (uint32_t)entity, offsetX, offsetZ);
+    Notify(ImGuiToastType_Success, 2000, "Cube created");
 }
 
 entt::entity EditorUI::DuplicateSingle(entt::entity src)
@@ -1569,120 +1576,179 @@ void EditorUI::DuplicateEntity(entt::entity entity)
 
     BINAX_LOG_INFO("Duplicated '{0}' with {1} entities",
                    GetEntityName(entity), remap.size());
+    Notify(ImGuiToastType_Success, 2000, "Duplicated '%s'", GetEntityName(entity).c_str());
+}
+
+std::vector<entt::entity> EditorUI::CollectSubtree(entt::entity root) const
+{
+    std::vector<entt::entity> out;
+    if (!m_Registry.valid(root))
+        return out;
+
+    out.push_back(root);
+    std::unordered_set<entt::entity> seen{ root };
+
+    for (size_t i = 0; i < out.size(); ++i)
+    {
+        auto view = m_Registry.view<ParentComponent>();
+        for (auto e : view)
+        {
+            if (view.get<ParentComponent>(e).Parent == out[i] && seen.insert(e).second)
+                out.push_back(e);
+        }
+    }
+
+    return out;
 }
 
 
 
 
 
-void EditorUI::ApplyQtGrayStyle()
+void EditorUI::ApplyModernDarkStyle()
 {
-    ImGuiStyle& style = ImGui::GetStyle();
-    ImVec4* colors = style.Colors;
+    ImGuiStyle& s = ImGui::GetStyle();
+    ImVec4* c = s.Colors;
 
-    style.WindowRounding    = 4.0f;
-    style.ChildRounding     = 3.0f;
-    style.FrameRounding     = 3.0f;
-    style.PopupRounding     = 3.0f;
-    style.ScrollbarRounding = 4.0f;
-    style.GrabRounding      = 3.0f;
-    style.TabRounding       = 3.0f;
-    style.FrameBorderSize   = 1.0f;
-    style.WindowBorderSize  = 1.0f;
+    // ---- Геометрия ----
+    s.WindowRounding    = 8.0f;
+    s.ChildRounding     = 6.0f;
+    s.FrameRounding     = 5.0f;
+    s.PopupRounding     = 8.0f;
+    s.ScrollbarRounding = 8.0f;
+    s.GrabRounding      = 5.0f;
+    s.TabRounding       = 5.0f;
 
-    colors[ImGuiCol_Text]                 = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
-    colors[ImGuiCol_TextDisabled]         = ImVec4(0.60f, 0.60f, 0.60f, 1.00f);
-    colors[ImGuiCol_WindowBg]             = ImVec4(0.94f, 0.94f, 0.94f, 1.00f);
-    colors[ImGuiCol_ChildBg]              = ImVec4(0.94f, 0.94f, 0.94f, 0.00f);
-    colors[ImGuiCol_PopupBg]              = ImVec4(1.00f, 1.00f, 1.00f, 0.98f);
-    colors[ImGuiCol_Border]               = ImVec4(0.70f, 0.70f, 0.70f, 1.00f);
-    colors[ImGuiCol_BorderShadow]         = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    colors[ImGuiCol_FrameBg]              = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
-    colors[ImGuiCol_FrameBgHovered]       = ImVec4(0.95f, 0.97f, 1.00f, 1.00f);
-    colors[ImGuiCol_FrameBgActive]        = ImVec4(0.88f, 0.92f, 0.96f, 1.00f);
-    colors[ImGuiCol_TitleBg]              = ImVec4(0.88f, 0.88f, 0.88f, 1.00f);
-    colors[ImGuiCol_TitleBgActive]        = ImVec4(0.82f, 0.85f, 0.88f, 1.00f);
-    colors[ImGuiCol_TitleBgCollapsed]     = ImVec4(0.88f, 0.88f, 0.88f, 0.40f);
-    colors[ImGuiCol_Button]               = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
-    colors[ImGuiCol_ButtonHovered]        = ImVec4(0.85f, 0.87f, 0.90f, 1.00f);
-    colors[ImGuiCol_ButtonActive]         = ImVec4(0.75f, 0.80f, 0.85f, 1.00f);
-    colors[ImGuiCol_Header]               = ImVec4(0.85f, 0.88f, 0.93f, 1.00f);
-    colors[ImGuiCol_HeaderHovered]        = ImVec4(0.78f, 0.84f, 0.92f, 1.00f);
-    colors[ImGuiCol_HeaderActive]         = ImVec4(0.68f, 0.77f, 0.88f, 1.00f);
-    colors[ImGuiCol_Separator]            = ImVec4(0.70f, 0.70f, 0.70f, 1.00f);
-    colors[ImGuiCol_SeparatorHovered]     = ImVec4(0.60f, 0.65f, 0.75f, 1.00f);
-    colors[ImGuiCol_SeparatorActive]      = ImVec4(0.50f, 0.55f, 0.65f, 1.00f);
-    colors[ImGuiCol_ResizeGrip]           = ImVec4(0.80f, 0.80f, 0.80f, 0.56f);
-    colors[ImGuiCol_ResizeGripHovered]    = ImVec4(0.70f, 0.75f, 0.85f, 0.67f);
-    colors[ImGuiCol_ResizeGripActive]     = ImVec4(0.60f, 0.65f, 0.75f, 0.95f);
-    colors[ImGuiCol_Tab]                  = ImVec4(0.85f, 0.85f, 0.85f, 1.00f);
-    colors[ImGuiCol_TabHovered]           = ImVec4(0.92f, 0.94f, 0.97f, 1.00f);
-    colors[ImGuiCol_TabActive]            = ImVec4(0.94f, 0.94f, 0.94f, 1.00f);
-    colors[ImGuiCol_TabUnfocused]         = ImVec4(0.88f, 0.88f, 0.88f, 1.00f);
-    colors[ImGuiCol_TabUnfocusedActive]   = ImVec4(0.94f, 0.94f, 0.94f, 1.00f);
-    colors[ImGuiCol_ScrollbarBg]          = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrab]        = ImVec4(0.75f, 0.75f, 0.75f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.65f, 0.65f, 0.65f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.55f, 0.55f, 0.55f, 1.00f);
-    colors[ImGuiCol_CheckMark]            = ImVec4(0.20f, 0.50f, 0.80f, 1.00f);
-    colors[ImGuiCol_SliderGrab]           = ImVec4(0.75f, 0.75f, 0.75f, 1.00f);
-    colors[ImGuiCol_SliderGrabActive]     = ImVec4(0.55f, 0.55f, 0.55f, 1.00f);
+    s.WindowBorderSize  = 0.0f;   // рамки не нужны — работает фон
+    s.FrameBorderSize   = 0.0f;
+    s.PopupBorderSize   = 1.0f;
+    s.WindowPadding     = ImVec2(10, 8);
+    s.FramePadding      = ImVec2(10, 5);
+    s.ItemSpacing       = ImVec2(10, 7);
+    s.ItemInnerSpacing  = ImVec2(8, 5);
+    s.ScrollbarSize     = 14.0f;
+    s.GrabMinSize       = 12.0f;
+    s.WindowTitleAlign  = ImVec2(0.0f, 0.5f);
+
+    // ---- Палитра ----
+    const ImVec4 bg0    (0.055f, 0.065f, 0.085f, 1.0f);  // окна
+    const ImVec4 bg1    (0.085f, 0.095f, 0.120f, 1.0f);  // фреймы/ребра
+    const ImVec4 bg2    (0.125f, 0.140f, 0.175f, 1.0f);  // hover
+    const ImVec4 bg3    (0.170f, 0.195f, 0.240f, 1.0f);  // active
+    const ImVec4 acc    (0.360f, 0.560f, 1.000f, 1.0f);  // #5C8FFF
+    const ImVec4 accDim (0.270f, 0.420f, 0.800f, 1.0f);
+    const ImVec4 txt    (0.860f, 0.880f, 0.920f, 1.0f);
+    const ImVec4 txtDim (0.520f, 0.545f, 0.600f, 1.0f);
+    const ImVec4 bdr    (0.160f, 0.180f, 0.220f, 1.0f);
+
+    c[ImGuiCol_Text]                 = txt;
+    c[ImGuiCol_TextDisabled]         = txtDim;
+    c[ImGuiCol_WindowBg]             = bg0;
+    c[ImGuiCol_ChildBg]              = bg0;
+    c[ImGuiCol_PopupBg]              = ImVec4(0.075f, 0.085f, 0.105f, 0.98f);
+    c[ImGuiCol_Border]               = bdr;
+    c[ImGuiCol_BorderShadow]         = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_FrameBg]              = bg1;
+    c[ImGuiCol_FrameBgHovered]       = bg2;
+    c[ImGuiCol_FrameBgActive]        = bg3;
+    c[ImGuiCol_TitleBg]              = bg0;
+    c[ImGuiCol_TitleBgActive]        = bg0;
+    c[ImGuiCol_TitleBgCollapsed]     = bg0;
+    c[ImGuiCol_MenuBarBg]            = bg0;
+    c[ImGuiCol_ScrollbarBg]          = bg0;
+    c[ImGuiCol_ScrollbarGrab]        = bg2;
+    c[ImGuiCol_ScrollbarGrabHovered] = bg3;
+    c[ImGuiCol_ScrollbarGrabActive]  = acc;
+    c[ImGuiCol_CheckMark]            = acc;
+    c[ImGuiCol_SliderGrab]           = accDim;
+    c[ImGuiCol_SliderGrabActive]     = acc;
+    c[ImGuiCol_Button]               = bg1;
+    c[ImGuiCol_ButtonHovered]        = bg2;
+    c[ImGuiCol_ButtonActive]         = acc;
+    c[ImGuiCol_Header]               = bg1;
+    c[ImGuiCol_HeaderHovered]        = bg2;
+    c[ImGuiCol_HeaderActive]         = bg3;
+    c[ImGuiCol_Separator]            = bdr;
+    c[ImGuiCol_SeparatorHovered]     = acc;
+    c[ImGuiCol_SeparatorActive]      = acc;
+    c[ImGuiCol_ResizeGrip]           = ImVec4(acc.x, acc.y, acc.z, 0.20f);
+    c[ImGuiCol_ResizeGripHovered]    = ImVec4(acc.x, acc.y, acc.z, 0.45f);
+    c[ImGuiCol_ResizeGripActive]     = ImVec4(acc.x, acc.y, acc.z, 0.80f);
+    c[ImGuiCol_Tab]                  = bg0;
+    c[ImGuiCol_TabHovered]           = bg2;
+    c[ImGuiCol_TabActive]            = bg1;
+    c[ImGuiCol_TabUnfocused]         = bg0;
+    c[ImGuiCol_TabUnfocusedActive]   = bg1;
+    c[ImGuiCol_PlotLines]            = acc;
+    c[ImGuiCol_PlotHistogram]        = acc;
+    c[ImGuiCol_TextSelectedBg]       = ImVec4(acc.x, acc.y, acc.z, 0.35f);
+    c[ImGuiCol_NavHighlight]         = acc;
+    c[ImGuiCol_DragDropTarget]       = ImVec4(acc.x, acc.y, acc.z, 0.9f);
 }
 
 void EditorUI::LoadEditorFont()
 {
+    ImGuiIO& io = ImGui::GetIO();
+
+    const float       fontSize = 16.0f;
     const std::string fontPath = Paths::Resolve("resources/fonts/EditorFont.ttf");
 
-    std::FILE* file = OpenFileUtf8(fontPath);
-    if (!file)
-    {
-        BINAX_LOG_INFO("[Editor] Font not found at '{}', using default", fontPath);
-        return;
-    }
+    bool textFontLoaded = false;
 
-    std::fseek(file, 0, SEEK_END);
-    const long sz = std::ftell(file);
-    std::fseek(file, 0, SEEK_SET);
-
-    if (sz <= 0)
+    if (std::FILE* file = OpenFileUtf8(fontPath))
     {
+        std::fseek(file, 0, SEEK_END);
+        const long sz = std::ftell(file);
+        std::fseek(file, 0, SEEK_SET);
+
+        if (sz > 0)
+        {
+            char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(sz)));
+            if (buf)
+            {
+                const size_t readBytes =
+                    std::fread(buf, 1, static_cast<size_t>(sz), file);
+
+                if (readBytes == static_cast<size_t>(sz))
+                {
+                    // FontDataOwnedByAtlas = true (default): ImGui забирает буфер,
+                    // вручную free НЕ вызываем.
+                    ImFont* font = io.Fonts->AddFontFromMemoryTTF(
+                        buf, static_cast<int>(sz), fontSize);
+
+                    if (font)
+                    {
+                        io.FontDefault = font;
+                        textFontLoaded = true;
+                        BINAX_LOG_INFO("[Editor] Loaded text font: {}", fontPath);
+                    }
+                    else
+                    {
+                        std::free(buf);
+                        BINAX_LOG_WARN("[Editor] Failed to parse font '{}'", fontPath);
+                    }
+                }
+                else
+                {
+                    std::free(buf);
+                    BINAX_LOG_WARN("[Editor] Short read while loading font '{}'", fontPath);
+                }
+            }
+        }
         std::fclose(file);
-        BINAX_LOG_WARN("[Editor] Font file '{}' is empty", fontPath);
-        return;
-    }
-
-    char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(sz)));
-    if (!buf)
-    {
-        std::fclose(file);
-        BINAX_LOG_WARN("[Editor] Failed to allocate {} bytes for font", sz);
-        return;
-    }
-
-    const size_t readBytes = std::fread(buf, 1, static_cast<size_t>(sz), file);
-    std::fclose(file);
-
-    if (readBytes != static_cast<size_t>(sz))
-    {
-        std::free(buf);
-        BINAX_LOG_WARN("[Editor] Short read while loading font '{}'", fontPath);
-        return;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    ImFont* font = io.Fonts->AddFontFromMemoryTTF(buf, static_cast<int>(sz), 16.0f);
-    if (font)
-    {
-        BINAX_LOG_INFO("[Editor] Loaded font: {}", fontPath);
-        io.FontDefault = font;
     }
     else
     {
-        
-        
-        
-        BINAX_LOG_WARN("[Editor] Failed to parse font '{}'", fontPath);
+        BINAX_LOG_INFO("[Editor] Font not found at '{}', using default", fontPath);
     }
+
+    // Обязательный фолбэк — современный ImGui требует хотя бы один шрифт
+    if (!textFontLoaded)
+        io.Fonts->AddFontDefault();
+
+    // Мержим FA из встроенного массива fa_solid_900[] (см. imgui_notify.h)
+    ImGui::MergeIconsWithLatestFont(fontSize);
+    BINAX_LOG_INFO("[Editor] Font Awesome 5 icons merged");
 }
 
 bool EditorUI::IsGizmoUsing() const   { return ImGuizmo::IsUsing(); }
