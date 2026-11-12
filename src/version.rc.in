@@ -20,7 +20,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "Atomizr"
-            VALUE "FileDescription",  "Binax Engine - Game Engine & Level Editor"
+            VALUE "FileDescription",  "Binax Engine - GameEngine & Level Editor"
             VALUE "FileVersion",      "1.0.0.0"
             VALUE "InternalName",     "BinaxEngine"
             VALUE "LegalCopyright",   "Copyright (C) 2026 Atomizr. All rights reserved."
