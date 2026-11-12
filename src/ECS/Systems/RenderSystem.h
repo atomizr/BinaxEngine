@@ -1,10 +1,13 @@
+// ECS/Systems/RenderSystem.h
 #pragma once
 
 #include <entt/entt.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <vector>
+
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_inverse.hpp>   // FIX: для glm::inverseTranspose
 
 #include "Renderer/DeferredRenderer.h"
 #include "Renderer/DrawCommand.h"
@@ -12,7 +15,6 @@
 #include "Renderer/InstanceBuffer.h"
 #include "Renderer/MaterialLibrary.h"
 #include "Renderer/MeshLibrary.h"
-
 #include "ECS/Components/Transform.h"
 #include "ECS/Components/PrevTransform.h"
 #include "ECS/Components/WorldTransform.h"
@@ -26,10 +28,6 @@ struct FrameRenderData
 {
     std::vector<InstanceGPU>          Instances;
     std::vector<DrawElementsIndirect> Draws;
-
-    
-    
-    
     std::vector<uint32_t>             DrawVertexCounts;
 };
 
@@ -55,10 +53,6 @@ public:
         cands.reserve(view.size_hint());
         out.Instances.reserve(view.size_hint());
 
-        
-        
-        
-        
         const MaterialHandle fallbackMat =
             MaterialLibrary::Get().GetOrCreateDefault();
 
@@ -79,15 +73,11 @@ public:
             const glm::mat4 model =
                 [&]() -> glm::mat4
                 {
-                    
                     if (const auto* wt = registry.try_get<WorldTransform>(e))
                         return wt->Matrix;
                     return tr.GetModelMatrix();
                 }();
 
-            
-            
-            
             auto& history = registry.get_or_emplace<PrevTransform>(e);
             const glm::mat4 prevModel = history.Valid ? history.PrevModel : model;
             history.PrevModel = model;
@@ -97,10 +87,11 @@ public:
         }
 
         std::sort(cands.begin(), cands.end(),
-                  [](const Candidate& a, const Candidate& b){ return a.Mesh < b.Mesh; });
+            [](const Candidate& a, const Candidate& b){ return a.Mesh < b.Mesh; });
 
         uint32_t instanceCursor = 0;
         size_t i = 0;
+
         while (i < cands.size())
         {
             const MeshHandle meshId = cands[i].Mesh;
@@ -115,12 +106,22 @@ public:
                 InstanceGPU g{};
                 g.Model       = cands[k].Model;
                 g.PrevModel   = cands[k].PrevModel;
+
+                // FIX: нормальная матрица вычисляется на CPU один раз
+                // вместо дорогого inverse() в вершинном шейдере на каждый
+                // кадр / каждый вершину.
+                // Для матрицы без неравномерного масштаба можно было бы
+                // использовать просто mat3(Model), но inverseTranspose
+                // корректно обрабатывает все случаи.
+                g.NormalMatrix = glm::inverseTranspose(cands[k].Model);
+
                 g.MaterialId  = cands[k].Material;
                 g.MeshId      = meshId;
                 g.BoneOffset  = 0;
                 g.Flags       = InstanceFlags::None;
                 out.Instances.push_back(g);
             }
+
             instanceCursor += instCount;
 
             const MeshGPU& mesh = MeshLibrary::Get().Get(meshId);
@@ -131,6 +132,7 @@ public:
             cmd.FirstIndex    = mesh.BaseIndex;
             cmd.BaseVertex    = mesh.BaseVertex;
             cmd.BaseInstance  = baseInstance;
+
             out.Draws.push_back(cmd);
             out.DrawVertexCounts.push_back(mesh.VertexCount);
 
@@ -140,9 +142,6 @@ public:
 
     static void CollectLights(entt::registry& registry, std::vector<GPULight>& out)
     {
-        
-        
-        
         out.clear();
         out.reserve(kMaxLights);
 
@@ -169,16 +168,12 @@ public:
                 case LightType::Point:       gpu.LightType = GPULight::Point;       break;
                 case LightType::Spot:        gpu.LightType = GPULight::Spot;        break;
             }
+
             out.push_back(gpu);
         }
 
         if (out.empty())
         {
-            
-            
-            
-            
-            
             GPULight def;
             def.LightType = GPULight::Directional;
             def.Direction = glm::normalize(glm::vec3(-1.0f, -1.0f, -1.0f));
@@ -189,4 +184,4 @@ public:
     }
 };
 
-} 
+}
