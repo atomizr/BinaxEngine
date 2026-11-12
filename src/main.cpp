@@ -333,10 +333,24 @@ int main()
         editorUI.SetViewport(&viewport);
 
         // Редактор шейдеров: при сохранении файла просим рендерер перечитать шейдеры
+        // === Object picking: нужен frameData — объявляем заранее ===
+        Binax::FrameRenderData frameData;   // <-- ПЕРЕНЕСЕНО СЮДА
+
+        // Редактор шейдеров: при сохранении файла просим рендерер перечитать шейдеры
         editorUI.GetShaderEditor().SetReloadCallback(
             [&renderer](const std::string& /*path*/)
             {
                 renderer.ReloadShaders();
+            });
+
+        // === Object picking: LMB-клик в viewport → выделение объекта ===
+        editorUI.SetPickCallback(
+            [&](ImVec2 uv) -> entt::entity
+            {
+                return Binax::RenderSystem::PickEntityAtUV(
+                    frameData,
+                    renderer.GetGBuffer(),
+                    uv.x, uv.y);
             });
 
         bool vsyncEnabled = props.VSync;
@@ -464,9 +478,6 @@ int main()
 
         std::vector<Binax::GPULight> collectedLights;
         collectedLights.reserve(Binax::kMaxLights);
-
-        Binax::FrameRenderData frameData;
-
         glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
 
         // ============================================================

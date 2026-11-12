@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <entt/entt.hpp>
@@ -6,8 +5,10 @@
 #include <cstdint>
 #include <vector>
 
+#include <glad/glad.h>                    // <-- ДОБАВИТЬ (glReadPixels и др.)
+
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_inverse.hpp>   
+#include <glm/gtc/matrix_inverse.hpp>
 
 #include "Renderer/DeferredRenderer.h"
 #include "Renderer/DrawCommand.h"
@@ -107,23 +108,15 @@ public:
             for (size_t k = i; k < j; ++k)
             {
                 InstanceGPU g{};
-                g.Model       = cands[k].Model;
-                g.PrevModel   = cands[k].PrevModel;
-
-                
-                
-                
-                
-                
-                
+                g.Model        = cands[k].Model;
+                g.PrevModel    = cands[k].PrevModel;
                 g.NormalMatrix = glm::inverseTranspose(cands[k].Model);
-
-                g.MaterialId  = cands[k].Material;
-                g.MeshId      = meshId;
-                g.BoneOffset  = 0;
-                g.Flags       = InstanceFlags::None;
+                g.MaterialId   = cands[k].Material;
+                g.MeshId       = meshId;
+                g.BoneOffset   = 0;
+                g.Flags        = InstanceFlags::None;
                 out.Instances.push_back(g);
-                out.InstanceEntities.push_back(cands[k].Entity); 
+                out.InstanceEntities.push_back(cands[k].Entity);
             }
 
             instanceCursor += instCount;
@@ -186,6 +179,79 @@ public:
             out.push_back(def);
         }
     }
+
+    // ============================================================
+    // Object picking
+    // Читает world position из G-Buffer по UV в [0,1] (Y-down, как ImGui),
+    // ищет instance, чей локальный AABB содержит эту точку.
+    // Возвращает entt::null если клик ушёл в небо или мимо объекта.
+    // ============================================================
+    static entt::entity PickEntityAtUV(const FrameRenderData& frame,
+                                       const GBuffer& gbuffer,
+                                       float u, float v)
+    {
+        if (gbuffer.GetFramebufferID() == 0)
+            return entt::null;
+
+        if (frame.Instances.empty() || frame.InstanceEntities.empty())
+            return entt::null;
+
+        const int w = (int)gbuffer.GetWidth();
+        const int h = (int)gbuffer.GetHeight();
+        if (w <= 0 || h <= 0)
+            return entt::null;
+
+        int px = (int)(u * (float)w);
+        int py = (int)(v * (float)h);
+        px = std::clamp(px, 0, w - 1);
+        py = std::clamp(py, 0, h - 1);
+
+        float worldPos[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+        // Сохраняем текущий READ_FRAMEBUFFER, чтобы не сломать внешний код.
+        GLint prevReadFBO = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, gbuffer.GetFramebufferID());
+        glReadBuffer(GL_COLOR_ATTACHMENT0);   // POSITION = attachment 0
+        glReadPixels(px, py, 1, 1, GL_RGBA, GL_FLOAT, worldPos);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevReadFBO);
+
+        const glm::vec3 p(worldPos[0], worldPos[1], worldPos[2]);
+
+        // Небо = (0,0,0) — G-Buffer очищается в чёрный.
+        if (p.x == 0.0f && p.y == 0.0f && p.z == 0.0f)
+            return entt::null;
+
+        const size_t n = std::min(frame.Instances.size(),
+                                  frame.InstanceEntities.size());
+
+        for (size_t i = 0; i < n; ++i)
+        {
+            const auto& inst = frame.Instances[i];
+            if (!MeshLibrary::Get().IsValid(inst.MeshId))
+                continue;
+
+            const MeshGPU& mesh = MeshLibrary::Get().Get(inst.MeshId);
+
+            // Точку из world в локальное пространство instance
+            const glm::mat4 invModel = glm::inverse(inst.Model);
+            const glm::vec3 lp = glm::vec3(invModel * glm::vec4(p, 1.0f));
+
+            // Эпсилон 0.5% от размера AABB — компенсирует float-ошибки
+            const glm::vec3 ext = (mesh.AABBMax - mesh.AABBMin) * 0.005f;
+
+            if (lp.x >= mesh.AABBMin.x - ext.x && lp.x <= mesh.AABBMax.x + ext.x &&
+                lp.y >= mesh.AABBMin.y - ext.y && lp.y <= mesh.AABBMax.y + ext.y &&
+                lp.z >= mesh.AABBMin.z - ext.z && lp.z <= mesh.AABBMax.z + ext.z)
+            {
+                return frame.InstanceEntities[i];
+            }
+        }
+
+        return entt::null;
+    }
 };
 
-}
+} // namespace Binax

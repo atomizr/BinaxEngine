@@ -783,6 +783,29 @@ void EditorUI::DrawViewport()
 
         if (m_ViewportHovered || ImGuizmo::IsUsing())
             DrawGizmo();
+
+        // === Object picking ===
+        // Делаем ПОСЛЕ DrawGizmo, чтобы ImGuizmo::IsOver() был актуален
+        // (он пересчитывается внутри ImGuizmo::Manipulate каждый кадр).
+        if (m_PickCallback &&
+            m_ViewportHovered &&
+            !ImGuizmo::IsOver() &&
+            !ImGuizmo::IsUsing() &&
+            !ImGui::GetIO().WantTextInput &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            vpSize.x > 0 && vpSize.y > 0)
+        {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const ImVec2 uv(
+                (mouse.x - vpPos.x) / vpSize.x,
+                1.0f - (mouse.y - vpPos.y) / vpSize.y);  // GL Y перевёрнут
+
+            if (uv.x >= 0.0f && uv.x <= 1.0f &&
+                uv.y >= 0.0f && uv.y <= 1.0f)
+            {
+                m_SelectedEntity = m_PickCallback(uv);
+            }
+        }
     }
     else
     {

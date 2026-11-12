@@ -62,6 +62,9 @@ public:
     bool CanRedo() const { return m_UndoCursor + 1 < (int)m_UndoStates.size(); }
     void Undo();
     void Redo();
+    using PickCallback = std::function<entt::entity(ImVec2 uv)>;
+    void SetPickCallback(PickCallback cb) { m_PickCallback = std::move(cb); }
+
 
     ImVec4 GetViewportScreenRect() const
     {
@@ -147,6 +150,7 @@ private:
     void RecordUndo();
     std::string CaptureScene() const;
     void RestoreScene(const std::string& state);
+    PickCallback m_PickCallback;
 };
 
 }
