@@ -10,6 +10,20 @@ endif()
 
 set(THIRDPARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 
+# >>> ASSIMP — пути к прекомпилированному assimp из thirdparty/assimp
+set(ASSIMP_DIR     ${THIRDPARTY_DIR}/assimp)
+set(ASSIMP_INCLUDE ${ASSIMP_DIR}/include)
+set(ASSIMP_LIBRARY ${ASSIMP_DIR}/lib/assimp-vc143-mt.lib)
+set(ASSIMP_DLL     ${ASSIMP_DIR}/bin/assimp-vc143-mt.dll)
+
+if (NOT EXISTS ${ASSIMP_LIBRARY})
+    message(FATAL_ERROR "Assimp lib not found at ${ASSIMP_LIBRARY}")
+endif()
+if (NOT EXISTS ${ASSIMP_INCLUDE}/assimp/scene.h)
+    message(FATAL_ERROR "Assimp headers not found at ${ASSIMP_INCLUDE}/assimp")
+endif()
+# <<< ASSIMP
+
 set(SOURCES
     src/main.cpp
     src/Core/Input.cpp
@@ -28,7 +42,8 @@ set(SOURCES
     src/Renderer/Texture.cpp
     src/Renderer/AssetRegistry.cpp
     src/Renderer/Cubemap.cpp
-    src/Renderer/im_anim.cpp 
+    src/Renderer/im_anim.cpp
+    src/Renderer/MeshImporter.cpp
 
     src/Editor/EditorUI.cpp
     src/Editor/EditorCamera.cpp
@@ -42,6 +57,7 @@ set(SOURCES
     src/Serialization/PropertySerializer.cpp
     src/Serialization/MaterialSerializer.cpp
     src/Serialization/PostProcessSerializer.cpp
+    src/Serialization/MeshCache.cpp
 
     src/Reflect/Reflection.cpp
     src/Reflect/ComponentRegistry.cpp
@@ -88,6 +104,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${THIRDPARTY_DIR}/nlohmann
     ${THIRDPARTY_DIR}/spdlog
     ${THIRDPARTY_DIR}/stb
+    ${ASSIMP_INCLUDE}          # >>> ASSIMP
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
@@ -111,7 +128,17 @@ find_package(OpenGL REQUIRED)
 target_link_libraries(${PROJECT_NAME}
     ${GLFW_LIBRARY}
     ${OPENGL_LIBRARIES}
+    ${ASSIMP_LIBRARY}          # >>> ASSIMP
 )
+
+# >>> ASSIMP — копировать DLL рядом с BinaxEngine.exe
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${ASSIMP_DLL}
+        $<TARGET_FILE_DIR:${PROJECT_NAME}>
+    COMMENT "Copying assimp-vc143-mt.dll to output directory"
+)
+# <<< ASSIMP
 
 if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD

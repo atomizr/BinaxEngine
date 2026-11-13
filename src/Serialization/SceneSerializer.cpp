@@ -7,6 +7,7 @@
 #include "ECS/Components/MaterialComponent.h"
 #include "ECS/Components/ParentComponent.h"
 #include "Serialization/PropertySerializer.h"
+#include "Serialization/MeshCache.h"
 #include "Reflect/ComponentRegistry.h"
 #include "Renderer/MeshLibrary.h"
 #include "Renderer/MaterialLibrary.h"
@@ -260,6 +261,11 @@ bool SceneSerializer::DeserializeFromString(entt::registry& registry,
             ParentComponent{ it->second });
     }
 
+    // Один общий Flush() на всю загрузку. MeshLibrary::Flush() имеет
+    // early-out `if (!m_Dirty && m_VAOReady) return;`, поэтому вызов
+    // безопасен, даже если ни один меш из кэша не грузился.
+    MeshLibrary::Get().Flush();
+
     return true;
 }
 
@@ -274,11 +280,15 @@ void SceneSerializer::SerializeEntity(entt::registry& registry,
 
     if (registry.any_of<MeshComponent>(entity))
     {
-        auto h = registry.get<MeshComponent>(entity).MeshId;
-        const std::string name = MeshLibrary::Get().IsValid(h)
-                                     ? MeshLibrary::Get().GetName(h)
+        const auto& mc = registry.get<MeshComponent>(entity);
+        const std::string name = MeshLibrary::Get().IsValid(mc.MeshId)
+                                     ? MeshLibrary::Get().GetName(mc.MeshId)
                                      : std::string{};
-        outJson["components"]["Mesh Component"]["MeshName"] = name;
+
+        auto& mcJson = outJson["components"]["Mesh Component"];
+        mcJson["MeshName"] = name;
+        if (!mc.SourcePath.empty())
+            mcJson["MeshSourcePath"] = mc.SourcePath;
     }
 
     if (registry.any_of<MaterialComponent>(entity))
@@ -306,13 +316,38 @@ void SceneSerializer::ApplyEntityData(entt::registry& registry,
 
         if (c.contains("Mesh Component") && registry.any_of<MeshComponent>(entity))
         {
-            auto name = String(c["Mesh Component"], "MeshName");
+            const auto& mcJson = c["Mesh Component"];
+            const std::string name    = String(mcJson, "MeshName");
+            const std::string srcPath = String(mcJson, "MeshSourcePath");
+
+            auto& mc = registry.get<MeshComponent>(entity);
+            mc.SourcePath = srcPath;
+
             if (!name.empty())
             {
                 MeshHandle h = MeshLibrary::Get().Find(name);
-                registry.get<MeshComponent>(entity).MeshId = h;
+
+                // Меш не зарегистрирован (рестарт движка) — пробуем кэш.
+                // Меш не зарегистрирован (рестарт движка) — пробуем кэш.
+                // Flush() НЕ вызываем здесь: он O(N) по всем мешам, а нам
+                // нужно загрузить их пачкой. Один общий Flush() — в конце
+                // DeserializeFromString.
+                if (h == kInvalidMesh && !srcPath.empty())
+                {
+                    std::vector<Vertex> verts;
+                    std::vector<uint32_t> idx;
+                    if (MeshCache::Load(Paths::Resolve(srcPath), verts, idx) &&
+                        !verts.empty() && !idx.empty())
+                    {
+                        h = MeshLibrary::Get().Add(name, verts, idx);
+                        BINAX_LOG_INFO("Level: loaded mesh '{}' from cache", name);
+                    }
+                }
+
+                mc.MeshId = h;
                 if (h == kInvalidMesh)
-                    BINAX_LOG_WARN("Level: unknown mesh '{}'", name);
+                    BINAX_LOG_WARN("Level: unknown mesh '{}' (cache missing at '{}')",
+                                   name, srcPath);
             }
         }
 

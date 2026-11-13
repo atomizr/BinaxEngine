@@ -171,8 +171,10 @@ vec3 SampleSkybox(vec3 dir)
 
 void main()
 {
-    vec3 worldPos = texture(u_PositionTexture, v_UV).rgb;
-    vec3 Nraw     = texture(u_NormalTexture,   v_UV).rgb;
+    vec3  worldPos = texture(u_PositionTexture, v_UV).rgb;
+    vec4  normalA  = texture(u_NormalTexture,   v_UV);
+    vec3  Nraw     = normalA.rgb;
+    bool  isUnlit  = normalA.a > 0.5;
 
     vec4 albedoAO = texture(u_AlbedoTexture, v_UV);
     vec3 albedo   = albedoAO.rgb;
@@ -185,6 +187,17 @@ void main()
 
     bool  skyReflEnabled  = mat.a >= 0.0;
     float skyReflStrength = max(mat.a, 0.0);
+
+    // ============================================================
+    // UNLIT — просто albedo, без света, IBL, теней и fog.
+    // ============================================================
+    if (isUnlit)
+    {
+        vec3 color = albedo * (1.0 + emissive);
+        color = OutlineComposite(color, v_UV);
+        FragColor = vec4(color, 1.0);
+        return;
+    }
 
     // ============================================================
     // SKY BRANCH — с экранным outline

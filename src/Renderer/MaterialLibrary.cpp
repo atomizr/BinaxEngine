@@ -6,14 +6,39 @@
 
 namespace Binax {
 
+const char* MaterialShaderTypeName(MaterialShaderType t)
+{
+    switch (t)
+    {
+        case MaterialShaderType::Lit:       return "Lit";
+        case MaterialShaderType::SimpleLit: return "Simple Lit";
+        case MaterialShaderType::Unlit:     return "Unlit";
+    }
+    return "Unknown";
+}
+
+MaterialShaderType MaterialShaderTypeFromInt(int v)
+{
+    switch (v)
+    {
+        case 1:  return MaterialShaderType::SimpleLit;
+        case 2:  return MaterialShaderType::Unlit;
+        default: return MaterialShaderType::Lit;
+    }
+}
+
 MaterialLibrary& MaterialLibrary::Get()
 {
     static MaterialLibrary instance;
     return instance;
 }
 
-MaterialHandle MaterialLibrary::Add(const std::string& name, const MaterialGPU& mat)
+MaterialHandle MaterialLibrary::Add(const std::string& name, const MaterialGPU& matIn)
 {
+    MaterialGPU mat = matIn;
+    // Гарантируем корректное кодирование shader type в z-канале.
+    // (int)mat.SkyReflParams.z может быть 0,1,2; сохраняем.
+
     auto it = m_ByName.find(name);
     if (it != m_ByName.end())
     {
@@ -23,7 +48,9 @@ MaterialHandle MaterialLibrary::Add(const std::string& name, const MaterialGPU& 
 
     MaterialHandle h = (MaterialHandle)m_CPU.size();
     m_CPU.push_back(mat);
-    MaterialEditData ed; ed.Name = name;
+    MaterialEditData ed;
+    ed.Name       = name;
+    ed.ShaderType = MaterialShaderTypeFromInt((int)mat.SkyReflParams.z);
     m_Edit.push_back(std::move(ed));
     m_ByName[name] = h;
     m_Dirty = true;
@@ -32,8 +59,6 @@ MaterialHandle MaterialLibrary::Add(const std::string& name, const MaterialGPU& 
 
 MaterialHandle MaterialLibrary::GetOrCreateDefault()
 {
-    
-    
     constexpr const char* kName = "__Default";
 
     auto it = m_ByName.find(kName);
@@ -43,7 +68,7 @@ MaterialHandle MaterialLibrary::GetOrCreateDefault()
     MaterialGPU def{};
     def.AlbedoRoughness = glm::vec4(0.8f, 0.8f, 0.8f, 0.5f);
     def.MetallicAOEms   = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
-    def.SkyReflParams   = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
+    def.SkyReflParams   = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);   // z=0 → Lit
     def.StrengthA       = glm::vec4(1.0f);
     def.StrengthB       = glm::vec4(1.0f);
     return Add(kName, def);
@@ -58,6 +83,7 @@ MaterialHandle MaterialLibrary::Copy(const std::string& newName, MaterialHandle 
 
     MaterialEditData ed = m_Edit[src];
     ed.Name = newName;
+    // ShaderType уже скопирован через ed.ShaderType и через SkyReflParams.z
     m_Edit[h] = std::move(ed);
     m_Dirty = true;
     return h;

@@ -2,7 +2,7 @@
 #extension GL_ARB_bindless_texture : require
 
 layout(location = 0) out vec3  g_Position;
-layout(location = 1) out vec3  g_Normal;
+layout(location = 1) out vec4  g_NormalA;   // rgb=normal, a=unlitFlag
 layout(location = 2) out vec4  g_Albedo_AO;
 layout(location = 3) out vec4  g_Material;
 layout(location = 4) out vec2  g_Velocity;
@@ -16,7 +16,7 @@ flat in uint v_InstanceIndex;
 struct InstanceGPU {
     mat4 Model;
     mat4 PrevModel;
-    mat4 NormalMatrix;   
+    mat4 NormalMatrix;
     uint MaterialId;
     uint MeshId;
     uint BoneOffset;
@@ -30,7 +30,7 @@ layout(std430, binding = 1) readonly buffer Instances {
 struct MaterialGPU {
     vec4  AlbedoRoughness;
     vec4  MetallicAOEms;
-    vec4  SkyReflParams;
+    vec4  SkyReflParams;    // z = ShaderType (0=Lit,1=SimpleLit,2=Unlit)
     vec4  StrengthA;
     uvec2 AlbedoHandle;
     uvec2 NormalHandle;
@@ -75,6 +75,8 @@ void main()
     InstanceGPU inst = instances[v_InstanceIndex];
     MaterialGPU m    = materials[inst.MaterialId];
 
+    int shaderType = int(m.SkyReflParams.z + 0.5);
+
     vec2 uv = v_UV * m.MetallicAOEms.w;
 
     vec3 albedoTint = sRGBToLinear(m.AlbedoRoughness.rgb);
@@ -85,6 +87,25 @@ void main()
 
     vec3 N = normalize(v_Normal);
 
+    // ===== UNLIT ==========================================================
+    if (shaderType == 2)
+    {
+        float emissive = m.MetallicAOEms.z;
+        if (m.EmissiveHandle != kNoHandle)
+            emissive = texture(sampler2D(m.EmissiveHandle), uv).r * m.StrengthA.w;
+
+        g_Position  = v_WorldPos;
+        g_NormalA   = vec4(N, 1.0);                    // a=1 → unlit
+        g_Albedo_AO = vec4(baseColor, 1.0);
+        g_Material  = vec4(0.0, 1.0, emissive, -1.0);  // metallic=0, rough=1, no IBL
+        g_Velocity  = v_Velocity;
+        return;
+    }
+
+    // ===== LIT / SIMPLE LIT ==============================================
+    // Simple Lit отключает PBR-карты и IBL, но оставляет normal-map.
+    const bool simpleLit = (shaderType == 1);
+
     if (m.NormalHandle != kNoHandle)
     {
         mat3 TBN = ComputeTBN(N, v_WorldPos, uv);
@@ -93,29 +114,36 @@ void main()
         N        = normalize(TBN * normalize(s));
     }
 
-    float metallic  = m.MetallicAOEms.x;
-    float roughness = m.AlbedoRoughness.w;
-    float ao        = m.MetallicAOEms.y;
+    float metallic  = 0.0;
+    float roughness = 1.0;
+    float ao        = 1.0;
     float emissive  = m.MetallicAOEms.z;
 
-    if (m.MetallicHandle != kNoHandle)
-        metallic = clamp(texture(sampler2D(m.MetallicHandle), uv).r * m.StrengthA.x, 0.0, 1.0);
+    if (!simpleLit)
+    {
+        metallic  = m.MetallicAOEms.x;
+        roughness = m.AlbedoRoughness.w;
+        ao        = m.MetallicAOEms.y;
 
-    if (m.RoughnessHandle != kNoHandle)
-        roughness = clamp(texture(sampler2D(m.RoughnessHandle), uv).r * m.StrengthA.y, 0.04, 1.0);
+        if (m.MetallicHandle != kNoHandle)
+            metallic = clamp(texture(sampler2D(m.MetallicHandle), uv).r * m.StrengthA.x, 0.0, 1.0);
 
-    if (m.AOHandle != kNoHandle)
-        ao = clamp(texture(sampler2D(m.AOHandle), uv).r * m.StrengthA.z, 0.0, 1.0);
+        if (m.RoughnessHandle != kNoHandle)
+            roughness = clamp(texture(sampler2D(m.RoughnessHandle), uv).r * m.StrengthA.y, 0.04, 1.0);
+
+        if (m.AOHandle != kNoHandle)
+            ao = clamp(texture(sampler2D(m.AOHandle), uv).r * m.StrengthA.z, 0.0, 1.0);
+    }
 
     if (m.EmissiveHandle != kNoHandle)
         emissive = texture(sampler2D(m.EmissiveHandle), uv).r * m.StrengthA.w;
 
-    float skyReflPacked = (m.SkyReflParams.x > 0.5)
+    float skyReflPacked = (!simpleLit && m.SkyReflParams.x > 0.5)
         ? max(m.SkyReflParams.y, 0.0)
         : -1.0;
 
     g_Position  = v_WorldPos;
-    g_Normal    = N;
+    g_NormalA   = vec4(N, 0.0);                        // a=0 → lit
     g_Albedo_AO = vec4(baseColor, ao);
     g_Material  = vec4(metallic, roughness, emissive, skyReflPacked);
     g_Velocity  = v_Velocity;

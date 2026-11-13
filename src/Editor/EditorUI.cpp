@@ -22,6 +22,7 @@
 #include "Renderer/MeshLibrary.h"
 #include "Renderer/MaterialLibrary.h"
 #include "Renderer/im_anim.h"
+#include "Renderer/MeshImporter.h"
 #include "Utils/Log.h"
 #include "Serialization/SceneSerializer.h"
 #include "Serialization/MaterialSerializer.h"
@@ -39,6 +40,7 @@
 #include "Reflect/EngineReflection.h"
 #include "Editor/PropertyWidgets.h"
 #include "Serialization/PropertySerializer.h"
+#include "Serialization/MeshCache.h"
 #include "Utils/FileIO.h"
 #include "Utils/Paths.h"
 #include "imgui_notify.h"
@@ -48,7 +50,23 @@
 #include <cstdarg>
 
 namespace {
-
+std::string SanitizeFileName(const std::string& name)
+{
+    std::string out;
+    out.reserve(name.size());
+    for (char c : name)
+    {
+        switch (c) {
+        case '\\': case '/': case ':': case '*': case '?':
+        case '"':  case '<': case '>': case '|':
+            out.push_back('_'); break;
+        default:
+            out.push_back(c); break;
+        }
+    }
+    if (out.empty()) out = "mesh";
+    return out;
+}
 
 
 std::string PathToUtf8(const std::filesystem::path& p)
@@ -630,6 +648,7 @@ void EditorUI::Draw()
         DrawMaterialEditor();
 
     PropertyWidgets::DrawFileBrowser();
+    DrawImportDialog();   // ← ДОБАВЛЕНО
 
     for (auto& cb : m_ExtraPanelDrawers)
         if (cb) cb();
@@ -1005,6 +1024,15 @@ void EditorUI::DrawHierarchy()
     ImGui::SameLine();
     if (AnimatedButton("+ New", ImVec2(80, 28), true)) CreateCubeEntity();
 
+    ImGui::SameLine();
+    if (AnimatedButton("Import", ImVec2(80, 28), false))
+    {
+        PropertyWidgets::OpenFileBrowser(
+            "Import Mesh",
+            MeshImporter::GetSupportedExtensions(),
+            [this](const std::string& path) { ImportMeshFromFile(path); });
+    }
+
 
     ImGui::SameLine();
     ImGui::BeginDisabled(!CanUndo());
@@ -1255,18 +1283,64 @@ void EditorUI::DrawInspector()
             auto& mc  = m_Registry.get<MaterialComponent>(m_SelectedEntity);
             auto& lib = MaterialLibrary::Get();
 
-            const std::string current = lib.IsValid(mc.MaterialId)
-                                            ? lib.GetName(mc.MaterialId)
-                                            : std::string("(none)");
+            // ---- Shader type -------------------------------------------
+            {
+                const MaterialShaderType cur =
+                    lib.IsValid(mc.MaterialId) ? lib.GetShaderType(mc.MaterialId)
+                                               : MaterialShaderType::Lit;
+
+                const char* items[] = {
+                    MaterialShaderTypeName(MaterialShaderType::Lit),
+                    MaterialShaderTypeName(MaterialShaderType::SimpleLit),
+                    MaterialShaderTypeName(MaterialShaderType::Unlit),
+                };
+                int curIdx = static_cast<int>(cur);
+
+                ImGui::SetNextItemWidth(220.0f);
+                if (ImGui::Combo("Shader", &curIdx, items, IM_ARRAYSIZE(items)) &&
+                    lib.IsValid(mc.MaterialId))
+                {
+                    lib.SetShaderType(mc.MaterialId,
+                        static_cast<MaterialShaderType>(curIdx));
+                    lib.Flush();
+                    RecordUndo();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Lit: full PBR + IBL\n"
+                        "Simple Lit: Lambert, no PBR maps, no IBL\n"
+                        "Unlit: albedo only, no lighting");
+            }
+
+            // ---- Material selection ------------------------------------
+            const std::string currentName = lib.IsValid(mc.MaterialId)
+                                                ? lib.GetName(mc.MaterialId)
+                                                : std::string("(none)");
+
+            static char matFilter[64] = {};
+            ImGui::SetNextItemWidth(220.0f);
+            ImGui::InputTextWithHint("##matFilter", "Search material...",
+                                     matFilter, sizeof(matFilter));
 
             ImGui::SetNextItemWidth(220.0f);
-            if (ImGui::BeginCombo("Material Asset", current.c_str()))
+            if (ImGui::BeginCombo("Material Asset", currentName.c_str()))
             {
                 const auto& editData = lib.GetEditData();
+                const std::string filter = ToLowerAscii(matFilter);
+                bool anyShown = false;
+
                 for (uint32_t i = 0; i < (uint32_t)editData.size(); ++i)
                 {
+                    const std::string& name = editData[i].Name;
+                    if (!filter.empty() &&
+                        ToLowerAscii(name).find(filter) == std::string::npos)
+                        continue;
+
+                    anyShown = true;
                     const bool selected = (mc.MaterialId == i);
-                    if (ImGui::Selectable(editData[i].Name.c_str(), selected))
+                    std::string label = name + "  (" + std::to_string(i) + ")";
+
+                    if (ImGui::Selectable(label.c_str(), selected))
                     {
                         mc.MaterialId = i;
                         RecordUndo();
@@ -1274,9 +1348,11 @@ void EditorUI::DrawInspector()
                     if (selected)
                         ImGui::SetItemDefaultFocus();
                 }
+                if (!anyShown) ImGui::TextDisabled("No matches");
                 ImGui::EndCombo();
             }
 
+            // ---- Actions -----------------------------------------------
             if (lib.IsValid(mc.MaterialId))
             {
                 if (ImGui::SmallButton("Edit Material..."))
@@ -1284,6 +1360,36 @@ void EditorUI::DrawInspector()
                     m_EditingMaterial    = mc.MaterialId;
                     m_ShowMaterialEditor = true;
                 }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Make Unique"))
+                {
+                    const std::string baseName = lib.GetName(mc.MaterialId);
+                    std::string newName = baseName + "_unique";
+                    int suffix = 1;
+                    while (lib.Find(newName) != kInvalidMaterial)
+                        newName = baseName + "_unique" + std::to_string(suffix++);
+
+                    const MaterialHandle nh = lib.Copy(newName, mc.MaterialId);
+                    lib.Flush();
+                    mc.MaterialId = nh;
+                    BINAX_LOG_INFO("Material '{}' made unique for entity {}",
+                                   newName, (uint32_t)m_SelectedEntity);
+                    Notify(ImGuiToastType_Info, 2000,
+                           "Material cloned as '%s'", newName.c_str());
+                    RecordUndo();
+                }
+
+                uint32_t users = 0;
+                auto mv = m_Registry.view<MaterialComponent>();
+                for (auto e : mv)
+                    if (mv.get<MaterialComponent>(e).MaterialId == mc.MaterialId)
+                        ++users;
+                ImGui::TextDisabled(users > 1
+                    ? "Shared by %u entities" : "Used by 1 entity", users);
+            }
+            else
+            {
+                ImGui::TextDisabled("No material assigned — pick one above.");
             }
         }
 
@@ -1299,8 +1405,6 @@ void EditorUI::DrawInspector()
 
     if (!isCamera && !isSkybox)
         DrawAddComponentMenu();
-
-
 
     if (m_InspectorPendingRec && !ImGui::IsAnyItemActive())
     {
@@ -1376,6 +1480,9 @@ void EditorUI::DrawMaterialEditor()
 
         if (ImGui::CollapsingHeader("Base", ImGuiTreeNodeFlags_DefaultOpen))
         {
+                    ImGui::TextDisabled("Shader: %s",
+            MaterialShaderTypeName(MaterialLibrary::Get().GetShaderType(h)));
+        ImGui::Separator();
             if (ImGui::ColorEdit3("Albedo", &m.AlbedoRoughness.x))
                 MaterialLibrary::Get().MarkDirty();
             if (ImGui::SliderFloat("Roughness", &m.AlbedoRoughness.w, 0.04f, 1.0f))
@@ -1564,12 +1671,17 @@ entt::entity EditorUI::DuplicateSingle(entt::entity src)
         m_Registry.remove<EditorCameraComponent>(dst);
 
     
-    if (m_Registry.any_of<MeshComponent>(src))
+    // Копируем MeshComponent ПОЛНОСТЬЮ — включая SourcePath.
+    // Без SourcePath дубликат после рестарта движка не найдёт .bxmesh-кэш
+    // и останется с kInvalidMesh (PropertySerializer не сериализует
+    // MeshId, т.к. он Transient, поэтому патчим вручную).
+    // Дубликат ДЕЛИТ материал с оригиналом — копию не создаём.
+    // Если пользователь захочет независимый материал — в Inspector есть
+    // кнопка "Make Unique", которая явно клонирует.
+    if (m_Registry.any_of<MaterialComponent>(src))
     {
-        if (!m_Registry.any_of<MeshComponent>(dst))
-            m_Registry.emplace<MeshComponent>(dst);
-        m_Registry.get<MeshComponent>(dst).MeshId =
-            m_Registry.get<MeshComponent>(src).MeshId;
+        const auto srcH = m_Registry.get<MaterialComponent>(src).MaterialId;
+        m_Registry.get_or_emplace<MaterialComponent>(dst).MaterialId = srcH;
     }
 
     
@@ -1604,6 +1716,394 @@ entt::entity EditorUI::DuplicateSingle(entt::entity src)
     }
 
     return dst;
+}
+
+void EditorUI::ImportMeshFromFile(const std::string& path)
+{
+    ImportedModel model;
+    if (!MeshImporter::LoadFromFile(path, model))
+    {
+        Notify(ImGuiToastType_Error, 3500,
+               "Failed to import '%s'",
+               std::filesystem::path(path).filename().string().c_str());
+        return;
+    }
+
+    // Не создаём сущности сразу — открываем диалог настроек.
+    m_PendingImport            = {};   // сброс
+    m_PendingImport.Active     = true;
+    m_PendingImport.Path       = path;
+    m_PendingImport.Model      = std::move(model);
+    m_PendingImport.OpenPopupRequested = true;
+}
+
+void EditorUI::DrawImportDialog()
+{
+    if (!m_PendingImport.Active)
+        return;
+
+    if (m_PendingImport.OpenPopupRequested)
+    {
+        ImGui::OpenPopup("Import Model##dialog");
+        m_PendingImport.OpenPopupRequested = false;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(460, 0), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Import Model##dialog", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        // Попап закрылся нештатно (крестик) — сбрасываем состояние.
+        if (!ImGui::IsPopupOpen("Import Model##dialog"))
+            m_PendingImport.Active = false;
+        return;
+    }
+
+    const ImportedModel& m = m_PendingImport.Model;
+    const std::string fileName =
+        std::filesystem::path(m_PendingImport.Path).filename().string();
+
+    ImGui::Text("File:      %s", fileName.c_str());
+    ImGui::Text("Meshes:    %zu", m.Meshes.size());
+    ImGui::Text("Materials: %zu", m.Materials.size());
+    ImGui::Separator();
+
+    ImGui::Text("Bounds (local units):");
+    ImGui::Text("  size = %.3f x %.3f x %.3f",
+                m.BoundsSize.x, m.BoundsSize.y, m.BoundsSize.z);
+    ImGui::Text("  max dimension = %.4f", m.MaxDimension);
+
+    if (m.MaxDimension > 100.0f)
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+                           "Model is very large — probably exported in cm/mm.");
+    else if (m.MaxDimension < 0.01f)
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+                           "Model is very small — probably in meters, exported in mm.");
+
+    ImGui::Separator();
+
+    // ---- Scale mode --------------------------------------------------------
+    ImGui::TextUnformatted("Scale:");
+    if (ImGui::RadioButton("Auto-fit to scene", m_PendingImport.ScaleMode == ImportScaleMode::AutoFit))
+        m_PendingImport.ScaleMode = ImportScaleMode::AutoFit;
+    if (m_PendingImport.ScaleMode == ImportScaleMode::AutoFit)
+    {
+        ImGui::Indent();
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SliderFloat("##TargetSize", &m_PendingImport.TargetSize,
+                           0.1f, 20.0f, "Target = %.2f units");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Максимальный габарит модели станет равен этому значению");
+        ImGui::Unindent();
+    }
+
+    if (ImGui::RadioButton("Original scale", m_PendingImport.ScaleMode == ImportScaleMode::Original))
+        m_PendingImport.ScaleMode = ImportScaleMode::Original;
+
+    if (ImGui::RadioButton("Custom multiplier", m_PendingImport.ScaleMode == ImportScaleMode::Custom))
+        m_PendingImport.ScaleMode = ImportScaleMode::Custom;
+    if (m_PendingImport.ScaleMode == ImportScaleMode::Custom)
+    {
+        ImGui::Indent();
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::DragFloat("##CustomScale", &m_PendingImport.CustomScale,
+                         0.01f, 0.0001f, 1000.0f, "x%.4f");
+        ImGui::Unindent();
+    }
+
+    ImGui::Checkbox("Place on floor (recenter)", &m_PendingImport.Recenter);
+        // ---- UV / normal post-processing --------------------------------------
+    ImGui::Separator();
+    ImGui::TextUnformatted("UV / Normal fix-ups (if model looks wrong):");
+
+    ImGui::Checkbox("Flip V  (текстура вверх ногами)", &m_PendingImport.FlipUV_V);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(V = 1 - V)");
+
+    ImGui::Checkbox("Flip U  (текстура зеркальная)",  &m_PendingImport.FlipUV_U);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(U = 1 - U)");
+
+    ImGui::Checkbox("Flip normals  (модель «наизнанку»)", &m_PendingImport.FlipNormals);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(N = -N)");
+
+    // ---- Итоговый scale для превью ----------------------------------------
+    float previewScale = 1.0f;
+    switch (m_PendingImport.ScaleMode)
+    {
+    case ImportScaleMode::AutoFit:
+        previewScale = (m.MaxDimension > 1e-6f)
+            ? (m_PendingImport.TargetSize / m.MaxDimension) : 1.0f;
+        break;
+    case ImportScaleMode::Original: previewScale = 1.0f; break;
+    case ImportScaleMode::Custom:   previewScale = m_PendingImport.CustomScale; break;
+    }
+    if (!std::isfinite(previewScale) || std::abs(previewScale) < 1e-6f)
+        previewScale = 1.0f;
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Result size: %.2f x %.2f x %.2f",
+                        m.BoundsSize.x * previewScale,
+                        m.BoundsSize.y * previewScale,
+                        m.BoundsSize.z * previewScale);
+
+    ImGui::Separator();
+
+    if (ImGui::Button("Import", ImVec2(140, 0)))
+    {
+        ExecutePendingImport();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(140, 0)))
+    {
+        m_PendingImport = {};
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+void EditorUI::ExecutePendingImport()
+{
+    ImportedModel& model = m_PendingImport.Model;
+    if (model.Meshes.empty())
+    {
+        m_PendingImport = {};
+        return;
+    }
+
+    // ---- 1. Scale ----------------------------------------------------------
+    float scale = 1.0f;
+    switch (m_PendingImport.ScaleMode)
+    {
+    case ImportScaleMode::AutoFit:
+        scale = (model.MaxDimension > 1e-6f)
+            ? (m_PendingImport.TargetSize / model.MaxDimension) : 1.0f;
+        break;
+    case ImportScaleMode::Original: scale = 1.0f; break;
+    case ImportScaleMode::Custom:   scale = m_PendingImport.CustomScale; break;
+    }
+    if (!std::isfinite(scale) || std::abs(scale) < 1e-6f)
+        scale = 1.0f;
+
+    // ---- 2. UV / Normal flip-ups ------------------------------------------
+    if (m_PendingImport.FlipUV_U ||
+        m_PendingImport.FlipUV_V ||
+        m_PendingImport.FlipNormals)
+    {
+        const bool fU = m_PendingImport.FlipUV_U;
+        const bool fV = m_PendingImport.FlipUV_V;
+        const bool fN = m_PendingImport.FlipNormals;
+
+        for (auto& im : model.Meshes)
+            for (auto& v : im.Data.Vertices)
+            {
+                if (fU) v.UV.x   = 1.0f - v.UV.x;
+                if (fV) v.UV.y   = 1.0f - v.UV.y;
+                if (fN) v.Normal = -v.Normal;
+            }
+    }
+
+    // ---- 3. Pivot-фикс ----------------------------------------------------
+    // Смещаем ВСЕ вершины так, чтобы bottom-center модели оказался в
+    // (0,0,0) локального пространства. Тогда entity.position = spawnPos,
+    // entity.scale = scale, и скейл/поворот через гизмо крутятся вокруг
+    // пола — модель не улетает.
+    if (m_PendingImport.Recenter)
+    {
+        const glm::vec3 anchor(
+            model.BoundsCenter.x,
+            model.BoundsMin.y,
+            model.BoundsCenter.z);
+        const glm::vec3 offset = -anchor;
+
+        for (auto& im : model.Meshes)
+            for (auto& v : im.Data.Vertices)
+                v.Position += offset;
+
+        // Обновляем bounds (используются только для логов ниже)
+        model.BoundsMin    += offset;
+        model.BoundsMax    += offset;
+        model.BoundsCenter += offset;
+    }
+
+    // ---- 4. Точка спавна: правее всего, что уже есть на сцене -------------
+    float baseX = 0.0f;
+    {
+        auto view = m_Registry.view<Transform>();
+        float maxX = 0.0f;
+        bool  hasAny = false;
+        for (auto e : view)
+        {
+            const glm::vec3& p = view.get<Transform>(e).Position;
+            if (!hasAny || p.x > maxX) { maxX = p.x; hasAny = true; }
+        }
+        baseX = hasAny ? (maxX + 3.0f) : 0.0f;
+    }
+    const glm::vec3 spawnPos(baseX, 0.0f, 0.0f);
+
+    // ---- 5. Резолвим пути текстур -----------------------------------------
+    const std::filesystem::path modelDir =
+        std::filesystem::path(m_PendingImport.Path).parent_path();
+
+    auto resolveTexPath = [&](const std::string& p) -> std::string
+    {
+        if (p.empty()) return {};
+        std::filesystem::path tp = PathFromUtf8(p);
+        if (tp.is_absolute()) return PathToUtf8(tp);
+        return PathToUtf8(modelDir / tp);
+    };
+
+    // ---- 6. Материалы -----------------------------------------------------
+    std::vector<MaterialHandle> matHandles;
+    matHandles.reserve(model.Materials.size());
+
+    for (size_t i = 0; i < model.Materials.size(); ++i)
+    {
+        const ImportedMaterial& im = model.Materials[i];
+
+        MaterialGPU gpu{};
+        gpu.AlbedoRoughness = glm::vec4(im.Albedo[0], im.Albedo[1], im.Albedo[2],
+                                        im.Roughness);
+        gpu.MetallicAOEms   = glm::vec4(im.Metallic, 1.0f, im.Emissive, 1.0f);
+        gpu.SkyReflParams   = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
+        gpu.StrengthA       = glm::vec4(1.0f);
+        gpu.StrengthB       = glm::vec4(1.0f);
+
+        const std::string baseName = im.Name.empty()
+            ? (model.Name + "_Mat" + std::to_string(i))
+            : im.Name;
+        std::string matName = baseName;
+        for (int suffix = 1;
+             MaterialLibrary::Get().Find(matName) != kInvalidMaterial;
+             ++suffix)
+            matName = baseName + "_" + std::to_string(suffix);
+
+        MaterialHandle h = MaterialLibrary::Get().Add(matName, gpu);
+
+        const std::string albedo = resolveTexPath(im.AlbedoPath);
+        if (!albedo.empty())    MaterialLibrary::Get().SetAlbedoMap(h, albedo);
+        const std::string normal = resolveTexPath(im.NormalPath);
+        if (!normal.empty())    MaterialLibrary::Get().SetNormalMap(h, normal);
+        const std::string metal  = resolveTexPath(im.MetallicPath);
+        if (!metal.empty())     MaterialLibrary::Get().SetMetallicMap(h, metal);
+        const std::string rough  = resolveTexPath(im.RoughnessPath);
+        if (!rough.empty())     MaterialLibrary::Get().SetRoughnessMap(h, rough);
+        const std::string ao     = resolveTexPath(im.AOPath);
+        if (!ao.empty())        MaterialLibrary::Get().SetAOMap(h, ao);
+        const std::string emi    = resolveTexPath(im.EmissivePath);
+        if (!emi.empty())       MaterialLibrary::Get().SetEmissiveMap(h, emi);
+
+        matHandles.push_back(h);
+    }
+    MaterialLibrary::Get().Flush();
+
+    // ---- 7. Меши + запись в кэш -------------------------------------------
+    std::vector<MeshHandle> meshHandles;
+    std::vector<std::string> meshSourcePaths;
+    meshHandles.reserve(model.Meshes.size());
+    meshSourcePaths.reserve(model.Meshes.size());
+
+    for (size_t i = 0; i < model.Meshes.size(); ++i)
+    {
+        const ImportedMesh& im = model.Meshes[i];
+        if (im.Data.Vertices.empty() || im.Data.Indices.empty())
+        {
+            meshHandles.push_back(kInvalidMesh);
+            meshSourcePaths.push_back({});
+            continue;
+        }
+
+        const std::string baseName = model.Name + "_" + im.Name;
+        std::string meshName = baseName;
+        for (int suffix = 1;
+             MeshLibrary::Get().Find(meshName) != kInvalidMesh;
+             ++suffix)
+            meshName = baseName + "_" + std::to_string(suffix);
+
+        const MeshHandle h = MeshLibrary::Get().Add(meshName,
+                                                    im.Data.Vertices,
+                                                    im.Data.Indices);
+        meshHandles.push_back(h);
+
+        // Сохраняем бинарный кэш на диск — чтобы загрузка сцены после
+        // рестарта не требовала повторного импорта через assimp.
+        const std::string relPath =
+            "resources/imported/" + SanitizeFileName(meshName) + ".bxmesh";
+        if (!MeshCache::Save(Paths::Resolve(relPath),
+                             im.Data.Vertices, im.Data.Indices))
+        {
+            BINAX_LOG_WARN("Import '{}': mesh cache not written for '{}'",
+                           m_PendingImport.Path, meshName);
+            meshSourcePaths.push_back({});
+        }
+        else
+        {
+            meshSourcePaths.push_back(relPath);
+        }
+    }
+    MeshLibrary::Get().Flush();
+
+    // ---- 8. Сущности ------------------------------------------------------
+    MaterialHandle fallbackMat = MaterialLibrary::Get().GetOrCreateDefault();
+
+    uint32_t created = 0;
+    entt::entity firstEntity = entt::null;
+
+    for (size_t i = 0; i < meshHandles.size(); ++i)
+    {
+        const MeshHandle mh = meshHandles[i];
+        if (mh == kInvalidMesh)
+            continue;
+
+        MaterialHandle mat = fallbackMat;
+        const uint32_t matIdx = model.Meshes[i].MaterialIndex;
+        if (matIdx < matHandles.size() && matHandles[matIdx] != kInvalidMaterial)
+            mat = matHandles[matIdx];
+
+        const entt::entity entity = m_Registry.create();
+
+        // Pivot уже запечён в вершины — Transform выставляем напрямую.
+        m_Registry.emplace<Transform>(entity,
+                                      spawnPos,
+                                      glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+                                      glm::vec3(scale));
+
+        MeshComponent mc;
+        mc.MeshId     = mh;
+        mc.SourcePath = meshSourcePaths[i];
+        m_Registry.emplace<MeshComponent>(entity, mc);
+        m_Registry.emplace<MaterialComponent>(entity, MaterialComponent{ mat });
+
+        const std::string baseName = model.Name + "_" + model.Meshes[i].Name;
+        m_Registry.emplace<NameComponent>(entity, MakeUniqueName(baseName));
+
+        if (firstEntity == entt::null)
+            firstEntity = entity;
+
+        ++created;
+    }
+
+    if (firstEntity == entt::null)
+    {
+        BINAX_LOG_WARN("Import '{}': no valid meshes", m_PendingImport.Path);
+        Notify(ImGuiToastType_Warning, 3000, "No valid meshes in '%s'", model.Name.c_str());
+        m_PendingImport = {};
+        return;
+    }
+
+    BINAX_LOG_INFO("Imported '{}' — {} meshes (scale {:.3f}x), {} materials",
+                   m_PendingImport.Path, created, scale, matHandles.size());
+    Notify(ImGuiToastType_Success, 3000,
+           "Imported '%s' (%u meshes, scale %.2fx)",
+           model.Name.c_str(), created, scale);
+
+    SelectOnly(firstEntity);
+    FocusOnSelection();
+
+    RecordUndo();
+    m_PendingImport = {};
 }
 
 void EditorUI::DuplicateEntity(entt::entity entity)

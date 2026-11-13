@@ -14,6 +14,7 @@
 
 #include "Renderer/MaterialLibrary.h"
 #include "Renderer/MeshLibrary.h"
+#include "Renderer/MeshImporter.h"
 
 
 
@@ -168,6 +169,7 @@ private:
 
     void CreateEmptyEntity();
     void CreateCubeEntity();
+    void ImportMeshFromFile(const std::string& path);   // ← ДОБАВИТЬ
     void InitComponentFactory();
 
     void AddComponentToEntity(entt::entity entity, const std::string& componentName);
@@ -196,6 +198,28 @@ private:
     void RecordUndo();
     std::string CaptureScene() const;
     void RestoreScene(const std::string& state);
+        // ---- Import dialog ------------------------------------------------------
+    enum class ImportScaleMode { AutoFit, Original, Custom };
+
+    struct PendingImportState
+    {
+        bool            Active   = false;
+        std::string     Path;
+        ImportedModel   Model;
+        ImportScaleMode ScaleMode = ImportScaleMode::AutoFit;
+        float           TargetSize  = 2.0f;
+        float           CustomScale = 1.0f;
+        bool            Recenter    = true;
+        bool            OpenPopupRequested = false;
+
+        // UV / нормали — пост-обработка после assimp
+        bool FlipUV_U    = false;   // U = 1 - U
+        bool FlipUV_V    = false;   // V = 1 - V  (по умолчанию ВЫКЛ — см. MeshImporter)
+        bool FlipNormals = false;   // N = -N  (если модель «вывернута наизнанку»)
+    } m_PendingImport;
+
+    void DrawImportDialog();
+    void ExecutePendingImport();
 };
 
 }

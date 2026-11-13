@@ -48,6 +48,7 @@ bool MaterialSerializer::Save(const MaterialLibrary& lib, MaterialHandle handle,
     nlohmann::json j;
     j["version"] = kVersion;
     j["name"]    = ed.Name;
+    j["shaderType"] = static_cast<int>(ed.ShaderType);
 
     j["albedo"]    = { gpu.AlbedoRoughness.x, gpu.AlbedoRoughness.y, gpu.AlbedoRoughness.z };
     j["roughness"] = gpu.AlbedoRoughness.w;
@@ -174,7 +175,7 @@ bool MaterialSerializer::Load(MaterialLibrary& lib, const std::string& filepath)
                                     0.0f, 0.0f);
 
     const MaterialHandle h = lib.Add(name, gpu);
-
+    lib.SetShaderType(h, MaterialShaderTypeFromInt(Int(j, "shaderType", 0)));
     lib.SetAlbedoMap   (h, String(j, "albedoMap"));
     lib.SetNormalMap   (h, String(j, "normalMap"));
     lib.SetMetallicMap (h, String(j, "metallicMap"));
