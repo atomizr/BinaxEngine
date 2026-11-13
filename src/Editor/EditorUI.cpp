@@ -17,6 +17,7 @@
 #include "ECS/Components/SkyboxComponent.h"
 #include "ECS/Components/PostProcessComponent.h"
 #include "ECS/Components/ParentComponent.h"
+#include "ECS/Components/EntityFlags.h"
 #include "ECS/Systems/TransformSystem.h"
 #include "Renderer/Mesh.h"
 #include "Renderer/MeshLibrary.h"
@@ -481,6 +482,11 @@ void EditorUI::HandleShortcuts()
         m_Console.ToggleVisible();
     const bool shift = Input::IsKeyPressed(GLFW_KEY_LEFT_SHIFT) ||
                        Input::IsKeyPressed(GLFW_KEY_RIGHT_SHIFT);
+    if (ctrl && Input::IsKeyJustPressed(GLFW_KEY_S))
+        SaveScene();
+
+    if (ctrl && Input::IsKeyJustPressed(GLFW_KEY_O))
+        LoadScene();
 
     if (ctrl && Input::IsKeyJustPressed(GLFW_KEY_Z))
     {
@@ -1016,24 +1022,57 @@ void EditorUI::DrawCreateObjectDropdown()
 
 void EditorUI::DrawHierarchy()
 {
-    ImGui::Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
+    ImGui::Begin("Hierarchy", nullptr,
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_MenuBar);
 
-    if (AnimatedButton("Save", ImVec2(80, 28), false)) SaveScene();
-    ImGui::SameLine();
-    if (AnimatedButton("Load", ImVec2(80, 28), false)) LoadScene();
-    ImGui::SameLine();
-    if (AnimatedButton("+ New", ImVec2(80, 28), true)) CreateCubeEntity();
-
-    ImGui::SameLine();
-    if (AnimatedButton("Import", ImVec2(80, 28), false))
+    // ======================= Menu bar (File) ============================
+    if (ImGui::BeginMenuBar())
     {
-        PropertyWidgets::OpenFileBrowser(
-            "Import Mesh",
-            MeshImporter::GetSupportedExtensions(),
-            [this](const std::string& path) { ImportMeshFromFile(path); });
+        if (ImGui::BeginMenu("File"))
+        {
+            if (ImGui::MenuItem("Save", "Ctrl+S")) SaveScene();
+            if (ImGui::MenuItem("Load", "Ctrl+O")) LoadScene();
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenuBar();
     }
 
+    // ======================= + New (popup) ==============================
+    if (AnimatedButton("+ New", ImVec2(80, 28), true))
+        ImGui::OpenPopup("CreateMenuPopup");
 
+    if (ImGui::BeginPopup("CreateMenuPopup"))
+    {
+        if (ImGui::MenuItem("Create Empty"))
+            CreateEmptyEntity();
+
+        if (ImGui::BeginMenu("Light"))
+        {
+            if (ImGui::MenuItem("Directional (Sun)")) CreateLightEntity(LightType::Directional);
+            if (ImGui::MenuItem("Spot"))              CreateLightEntity(LightType::Spot);
+            if (ImGui::MenuItem("Point"))             CreateLightEntity(LightType::Point);
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::MenuItem("Import Mesh..."))
+        {
+            PropertyWidgets::OpenFileBrowser(
+                "Import Mesh",
+                MeshImporter::GetSupportedExtensions(),
+                [this](const std::string& path) { ImportMeshFromFile(path); });
+        }
+
+        if (ImGui::BeginMenu("Primitives"))
+        {
+            if (ImGui::MenuItem("Cube"))
+                CreateCubeEntity();
+            ImGui::EndMenu();
+        }
+
+        ImGui::EndPopup();
+    }
+
+    // ======================= Undo / Redo ================================
     ImGui::SameLine();
     ImGui::BeginDisabled(!CanUndo());
     if (AnimatedButton("Undo", ImVec2(64, 28), false)) Undo();
@@ -1046,6 +1085,7 @@ void EditorUI::DrawHierarchy()
 
     ImGui::Separator();
 
+    // ======================= Search =====================================
     if (m_FocusSearch)
     {
         ImGui::SetKeyboardFocusHere();
@@ -1063,6 +1103,7 @@ void EditorUI::DrawHierarchy()
     }
     ImGui::Separator();
 
+    // ======================= Tree =======================================
     if (m_HierarchySearch[0] != '\0')
     {
         const std::string filter = ToLowerAscii(m_HierarchySearch);
@@ -1076,6 +1117,12 @@ void EditorUI::DrawHierarchy()
 
             anyMatch = true;
             ImGui::PushID(static_cast<int>(entity));
+
+            const bool enabled = !m_Registry.any_of<EntityFlags>(entity) ||
+                                 m_Registry.get<EntityFlags>(entity).Enabled;
+            if (!enabled)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+
             const bool isSelected = (m_SelectedEntities.count(entity) != 0);
             if (ImGui::Selectable(name.c_str(), isSelected))
             {
@@ -1084,6 +1131,10 @@ void EditorUI::DrawHierarchy()
                 else
                     SelectOnly(entity);
             }
+
+            if (!enabled)
+                ImGui::PopStyleColor();
+
             ImGui::PopID();
         }
 
@@ -1168,8 +1219,16 @@ void EditorUI::DrawEntityRow(
 
     const bool isProtected = IsProtectedEntity(entity);
 
+    const bool enabled = !m_Registry.any_of<EntityFlags>(entity) ||
+                         m_Registry.get<EntityFlags>(entity).Enabled;
+    if (!enabled)
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+
     const bool open = ImGui::TreeNodeEx("##node", flags, "%s",
                                         GetEntityName(entity).c_str());
+
+    if (!enabled)
+        ImGui::PopStyleColor();
 
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
     {
@@ -1236,6 +1295,43 @@ void EditorUI::DrawInspector()
         ImGui::TextUnformatted("No entity selected");
         ImGui::End();
         return;
+    }
+
+        // ---- Entity flags (Enabled / Static) ----------------------------
+    // Не показываем для служебных сущностей (editor camera / skybox / pp).
+    const bool isSystemEntity =
+        IsEditorCamera(m_SelectedEntity) ||
+        m_Registry.any_of<SkyboxComponent>(m_SelectedEntity) ||
+        m_Registry.any_of<PostProcessComponent>(m_SelectedEntity);
+
+    if (!isSystemEntity)
+    {
+        auto& flags = m_Registry.get_or_emplace<EntityFlags>(m_SelectedEntity);
+
+        bool flagsChanged = false;
+        ImGui::PushID("##EntityFlagsHeader");
+
+        if (ImGui::Checkbox("Enabled", &flags.Enabled))
+            flagsChanged = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Enable / disable this object (hidden = not rendered)");
+
+        // "Static" — прижимаем к правому краю
+        const float staticW = ImGui::CalcTextSize("Static").x +
+                              ImGui::GetFrameHeight() +
+                              ImGui::GetStyle().ItemInnerSpacing.x;
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - staticW);
+        if (ImGui::Checkbox("Static", &flags.Static))
+            flagsChanged = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Static object (future: baked lighting / culling)");
+
+        ImGui::PopID();
+
+        if (flagsChanged)
+            RecordUndo();
+
+        ImGui::Separator();
     }
 
     const bool isCamera = IsEditorCamera(m_SelectedEntity);
@@ -1716,6 +1812,60 @@ entt::entity EditorUI::DuplicateSingle(entt::entity src)
     }
 
     return dst;
+}
+
+void EditorUI::CreateLightEntity(LightType type)
+{
+    const entt::entity entity = m_Registry.create();
+
+    // ---- позиция / поворот по умолчанию ------------------------------
+    glm::vec3 pos(0.0f, 3.0f, 0.0f);
+    glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
+
+    if (type == LightType::Directional)
+    {
+        // Sun: наверху, светит вниз-вперёд
+        pos = glm::vec3(0.0f, 10.0f, 0.0f);
+        rot = glm::angleAxis(glm::radians(-50.0f), glm::vec3(1.0f, 0.0f, 0.0f)) *
+              glm::angleAxis(glm::radians( 30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    }
+    else if (type == LightType::Spot)
+    {
+        // Светит вниз
+        pos = glm::vec3(0.0f, 5.0f, 0.0f);
+        rot = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    }
+    else
+    {
+        // Point — на высоте 3 метра
+        pos = glm::vec3(0.0f, 3.0f, 0.0f);
+    }
+
+    m_Registry.emplace<Transform>(entity, pos, rot, glm::vec3(1.0f));
+
+    LightComponent lc;
+    lc.Type        = type;
+    lc.Color       = glm::vec3(1.0f, 0.95f, 0.9f);
+    lc.Intensity   = (type == LightType::Directional) ? 3.0f : 2.0f;
+    lc.Range       = (type == LightType::Point) ? 12.0f : 25.0f;
+    lc.InnerCutoff = 0.92f;
+    lc.OuterCutoff = 0.80f;
+    m_Registry.emplace<LightComponent>(entity, lc);
+
+    m_Registry.emplace<EntityFlags>(entity);
+
+    const std::string baseName =
+        (type == LightType::Directional) ? "Directional Light"
+      : (type == LightType::Spot)        ? "Spot Light"
+                                         : "Point Light";
+    m_Registry.emplace<NameComponent>(entity, MakeUniqueName(baseName));
+
+    SelectOnly(entity);
+
+    BINAX_LOG_INFO("Created {} entity {}", baseName, (uint32_t)entity);
+    Notify(ImGuiToastType_Success, 2000, "%s created", baseName.c_str());
+
+    RecordUndo();
 }
 
 void EditorUI::ImportMeshFromFile(const std::string& path)

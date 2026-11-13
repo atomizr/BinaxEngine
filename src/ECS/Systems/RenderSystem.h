@@ -22,6 +22,7 @@
 #include "ECS/Components/MeshComponent.h"
 #include "ECS/Components/MaterialComponent.h"
 #include "ECS/Components/LightComponent.h"
+#include "ECS/Components/EntityFlags.h"
 
 namespace Binax {
 
@@ -62,6 +63,10 @@ public:
 
         for (auto e : view)
         {
+            if (registry.any_of<EntityFlags>(e) &&
+                !registry.get<EntityFlags>(e).Enabled)
+                continue;
+
             const auto& mc = view.get<MeshComponent>(e);
             if (mc.MeshId == kInvalidMesh || !MeshLibrary::Get().IsValid(mc.MeshId))
                 continue;
@@ -145,6 +150,10 @@ public:
         auto view = registry.view<Transform, LightComponent>();
         for (auto entity : view)
         {
+            if (registry.any_of<EntityFlags>(entity) &&
+                !registry.get<EntityFlags>(entity).Enabled)
+                continue;
+
             if ((int)out.size() >= kMaxLights) break;
 
             const auto& tr = view.get<Transform>(entity);

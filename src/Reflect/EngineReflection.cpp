@@ -10,6 +10,7 @@
 #include "ECS/Components/EditorCameraComponent.h"
 #include "ECS/Components/SkyboxComponent.h"
 #include "ECS/Components/PostProcessComponent.h"
+#include "ECS/Components/EntityFlags.h"
 
 using namespace Binax;
 
@@ -95,6 +96,12 @@ BINAX_REFLECT(Binax::SkyboxComponent)
     info.Add(&SkyboxComponent::FaceNZ,     "Face -Z",    PropertyKind::Asset).SetAssetType("Texture");
     info.Add(&SkyboxComponent::Rotation,   "Rotation",   PropertyKind::Float).SetRange(-180.0f, 180.0f);
     info.Add(&SkyboxComponent::Brightness, "Brightness", PropertyKind::Float).SetRange(0.0f, 10.0f);
+}
+
+BINAX_REFLECT(Binax::EntityFlags)
+{
+    info.Add(&EntityFlags::Enabled, "Enabled", PropertyKind::Bool);
+    info.Add(&EntityFlags::Static,  "Static",  PropertyKind::Bool);
 }
 
 BINAX_REFLECT(Binax::NameComponent)
@@ -191,6 +198,7 @@ void RegisterEngineComponents()
     cr.Register<LightComponent>        ("Light Component");
     cr.Register<CameraComponent>       ("Camera Component");
     cr.Register<NameComponent>         ("Name",                  true,  false);
+    cr.Register<EntityFlags>("EntityFlags", /*hidden=*/true, /*transient=*/false);
     cr.Register<EditorCameraComponent> ("EditorCameraComponent", true,  true);
     cr.Register<SkyboxComponent>       ("Skybox");
     cr.Register<PostProcessComponent>  ("Post Processing");
