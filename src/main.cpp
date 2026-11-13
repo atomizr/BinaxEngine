@@ -22,6 +22,7 @@
 #include "Utils/Log.h"
 #include "Utils/Paths.h"
 #include "Renderer/DeferredRenderer.h"
+#include "Renderer/ShadowSettings.h"
 #include "Renderer/Mesh.h"
 #include "Renderer/MeshLibrary.h"
 #include "Renderer/MaterialLibrary.h"
@@ -200,7 +201,7 @@ Binax::SkyboxParams GatherSkyboxParams(entt::registry& registry)
     return params;
 }
 
-} 
+}
 
 int main()
 {
@@ -259,6 +260,12 @@ int main()
 
         Binax::Timer timer;
         Binax::DeferredRenderer renderer(props.Width, props.Height);
+
+        // ---- Shadow settings (CSM) — одно объявление, до editorUI -----------
+        Binax::ShadowSettings shadowSettings;
+        Binax::ShadowSettingsSerializer::Load(
+            shadowSettings,
+            Binax::Paths::Resolve(Binax::AssetFiles::kShadowsFile));
 
         {
             auto cube = Binax::Mesh::CreateCube();
@@ -331,18 +338,15 @@ int main()
         Binax::EditorCamera editorCamera(viewport.GetAspect());
         Binax::EditorUI editorUI(window.GetGLFWWindow(), registry);
         editorUI.SetViewport(&viewport);
-
-
+        editorUI.SetShadowSettingsPtr(&shadowSettings);   // editorUI уже объявлен
 
         Binax::FrameRenderData frameData;
-
 
         editorUI.GetShaderEditor().SetReloadCallback(
             [&renderer](const std::string& )
             {
                 renderer.ReloadShaders();
             });
-
 
         editorUI.SetPickCallback(
             [&](ImVec2 uv) -> entt::entity
@@ -356,14 +360,6 @@ int main()
         bool vsyncEnabled = props.VSync;
         float smoothedFps = 0.0f;
 
-
-
-
-
-
-
-
-
         editorUI.AddPanelDrawer([&]()
         {
             const bool wantOverlay =
@@ -373,12 +369,9 @@ int main()
             {
                 const ImVec4 r = editorUI.GetViewportScreenRect();
 
-
-
                 ImGui::SetNextWindowPos(
                     ImVec2(r.x + r.z - 290.0f, r.y + 8.0f),
                     ImGuiCond_Always);
-
 
                 ImGui::SetNextWindowBgAlpha(0.92f);
             }
@@ -391,8 +384,6 @@ int main()
 
             if (wantOverlay)
             {
-
-
                 ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
             }
 
@@ -403,7 +394,6 @@ int main()
             smoothedFps = (smoothedFps <= 0.0f)
                               ? instFps
                               : smoothedFps * 0.9f + instFps * 0.1f;
-
 
             const float displayFps = iam_tween_float(
                 ImGui::GetID("fps_display"),
@@ -417,14 +407,12 @@ int main()
             ImGui::Text("FPS:        %.1f", displayFps);
             ImGui::Text("Frame time: %.2f ms", ms);
 
-
             static float fpsHistory[60] = {};
             static int   fpsOffset = 0;
             fpsHistory[fpsOffset] = smoothedFps;
             fpsOffset = (fpsOffset + 1) % IM_ARRAYSIZE(fpsHistory);
             ImGui::PlotLines("##fps", fpsHistory, IM_ARRAYSIZE(fpsHistory), fpsOffset,
                              nullptr, 0.0f, 240.0f, ImVec2(-1, 40));
-
 
             const float frameBudget = 16.6f;
             const float currentMs = 1000.0f / std::max(1.0f, smoothedFps);
@@ -471,7 +459,6 @@ int main()
 
             ImGui::End();
 
-
             if (!open)
                 editorUI.SetViewportStatsVisible(false);
         });
@@ -480,18 +467,13 @@ int main()
         collectedLights.reserve(Binax::kMaxLights);
         glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
 
-
-
-
         while (!window.ShouldClose())
         {
             timer.Update();
             float delta = timer.GetDelta();
 
-
             iam_update_begin_frame();
             iam_clip_update(delta);
-
 
             Binax::Input::Update();
             window.Update();
@@ -580,28 +562,37 @@ int main()
 
             Binax::TransformSystem::UpdateWorldTransforms(registry);
 
+            // ---- Build frame data (один раз!) --------------------------------
             Binax::RenderSystem::BuildFrameData(registry, frameData);
 
-    renderer.GeometryPass(frameData,
-                          editorCamera.GetViewMatrix(),
-                          editorCamera.GetProjectionMatrix());
-
-
-    {
-        const auto& selSet = editorUI.GetSelectedEntities();
-        std::vector<entt::entity> selVec(selSet.begin(), selSet.end());
-        renderer.RenderOutlinePass(
-            frameData,
-            selVec,
-            editorCamera.GetViewMatrix(),
-            editorCamera.GetProjectionMatrix(),
-            (uint32_t)viewport.GetSize().x,
-            (uint32_t)viewport.GetSize().y);
-    }
-
-
-    collectedLights.clear();
+            // ---- Lights (до shadow pass!) ------------------------------------
+            collectedLights.clear();
             Binax::RenderSystem::CollectLights(registry, collectedLights);
+
+            // ---- Shadow pass (получает уже заполненный список светов) --------
+            renderer.RenderShadowPass(frameData,
+                                      editorCamera.GetViewMatrix(),
+                                      editorCamera.GetProjectionMatrix(),
+                                      collectedLights,
+                                      shadowSettings);
+
+            // ---- Geometry pass (один раз!) -----------------------------------
+            renderer.GeometryPass(frameData,
+                                  editorCamera.GetViewMatrix(),
+                                  editorCamera.GetProjectionMatrix());
+
+            // ---- Outline pass ------------------------------------------------
+            {
+                const auto& selSet = editorUI.GetSelectedEntities();
+                std::vector<entt::entity> selVec(selSet.begin(), selSet.end());
+                renderer.RenderOutlinePass(
+                    frameData,
+                    selVec,
+                    editorCamera.GetViewMatrix(),
+                    editorCamera.GetProjectionMatrix(),
+                    (uint32_t)viewport.GetSize().x,
+                    (uint32_t)viewport.GetSize().y);
+            }
 
             Binax::SkyboxParams skyboxParams = GatherSkyboxParams(registry);
 
@@ -627,14 +618,12 @@ int main()
 
             editorUI.Draw();
 
-
             static float animGcTimer = 0.0f;
             if ((animGcTimer += delta) > 1.0f) {
                 iam_gc(600);
                 iam_clip_gc(600);
                 animGcTimer = 0.0f;
             }
-
 
             window.SwapBuffers();
         }

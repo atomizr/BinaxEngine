@@ -1,10 +1,10 @@
 #version 460 core
 
-in vec2 v_UV;
+in  vec2 v_UV;
 out vec4 FragColor;
 
 uniform sampler2D u_PositionTexture;
-uniform sampler2D u_NormalTexture;
+uniform sampler2D u_NormalTexture;   // rgb=normal, a=unlitFlag
 uniform sampler2D u_AlbedoTexture;
 uniform sampler2D u_MaterialTexture;
 uniform sampler2D u_OutlineTexture;
@@ -25,6 +25,22 @@ uniform float u_FogDensity;
 uniform float u_FogStart;
 uniform float u_FogEnd;
 
+// ---- Shadows (CSM Directional) -----------------------------------------
+uniform sampler2DArray u_ShadowMap;
+uniform mat4  u_LightSpaceMatrices[4];
+uniform float u_CascadeSplits[4];
+uniform int   u_CascadeCount;
+uniform int   u_ShadowMode;          // 0=None, 1=Hard, 2=Soft
+uniform int   u_ShadowLightIndex;    // -1 = no shadow caster
+uniform float u_DepthBias;
+uniform float u_NormalBias;
+uniform float u_ShadowSoftness;
+uniform float u_MaxShadowDistance;
+uniform float u_FadeOutDistance;
+uniform float u_ShadowStrength;
+uniform float u_BiasMultiplier;
+uniform mat4  u_ViewMatrix;
+
 const int MAX_LIGHTS = 32;
 struct Light {
     vec3  Position;
@@ -41,9 +57,9 @@ uniform int   u_LightCount;
 
 const float PI = 3.14159265359;
 
-// ---------------------------------------------------------------------------
-// Outline dilate — превращает сплошную маску объекта в пиксельное кольцо
-// ---------------------------------------------------------------------------
+// ============================================================================
+// Outline dilate
+// ============================================================================
 vec3 OutlineComposite(vec3 baseColor, vec2 uv)
 {
     if (u_HasOutline != 1)
@@ -51,13 +67,11 @@ vec3 OutlineComposite(vec3 baseColor, vec2 uv)
 
     vec2 texel = 1.0 / vec2(textureSize(u_OutlineTexture, 0));
 
-    // Внутри самого объекта outline не рисуем
     float center = texture(u_OutlineTexture, uv).a;
     if (center > 0.5)
         return baseColor;
 
-    // Ищем "solid" в радиусе R пикселей. Если нашли — здесь кольцо.
-    const int   R      = 2;       // радиус в пикселях (можно 2..4)
+    const int   R      = 2;
     const float step   = 1.0;
     float found = 0.0;
 
@@ -67,7 +81,7 @@ vec3 OutlineComposite(vec3 baseColor, vec2 uv)
         {
             if (x == 0 && y == 0) continue;
             float d2 = float(x*x + y*y);
-            if (d2 > float(R*R)) continue;    // круглый радиус, а не квадрат
+            if (d2 > float(R*R)) continue;
 
             float a = texture(u_OutlineTexture,
                               uv + vec2(x, y) * texel * step).a;
@@ -79,13 +93,13 @@ vec3 OutlineComposite(vec3 baseColor, vec2 uv)
     if (found < 0.5)
         return baseColor;
 
-    // Акцентный цвет из палитры редактора (#5C8FFF)
     vec3 outlineColor = vec3(0.36, 0.56, 1.0);
     return outlineColor;
 }
 
-
-
+// ============================================================================
+// BRDF
+// ============================================================================
 float D_GGX(float NdotH, float roughness)
 {
     float a  = roughness * roughness;
@@ -167,8 +181,84 @@ vec3 SampleSkybox(vec3 dir)
     return texture(u_EnvironmentMap, rotated).rgb * u_SkyboxBrightness;
 }
 
+// ============================================================================
+// Shadow sampling (CSM)
+// ============================================================================
+float SampleShadow(vec3 worldPos, vec3 N, vec3 L, float viewZ)
+{
+    if (u_ShadowMode == 0 || u_CascadeCount == 0)
+        return 1.0;
 
+    // Выбор каскада по view-space Z
+    int cascadeIdx = u_CascadeCount - 1;
+    for (int i = 0; i < u_CascadeCount; ++i)
+    {
+        if (viewZ < u_CascadeSplits[i]) { cascadeIdx = i; break; }
+    }
 
+    // Normal offset bias
+    vec3 offsetWorld   = worldPos + N * u_NormalBias;
+    vec4 lightSpacePos = u_LightSpaceMatrices[cascadeIdx] * vec4(offsetWorld, 1.0);
+    vec3 projCoords    = lightSpacePos.xyz / lightSpacePos.w;
+    projCoords = projCoords * 0.5 + 0.5;
+
+    // За пределами карты теней — не в тени
+    if (projCoords.z > 1.0 ||
+        projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0)
+        return 1.0;
+
+    // Slope-scaled depth bias
+    float NdotL = max(dot(N, L), 0.0);
+    float bias  = u_DepthBias * u_BiasMultiplier * (1.0 + (1.0 - NdotL) * 2.0);
+    float depth = projCoords.z - bias;
+
+    float shadow = 1.0;
+
+    if (u_ShadowMode == 1)
+    {
+        // Hard
+        float d = texture(u_ShadowMap,
+                          vec3(projCoords.xy, float(cascadeIdx))).r;
+        shadow = (depth > d) ? 0.0 : 1.0;
+    }
+    else
+    {
+        // Soft PCF
+        float softness = clamp(u_ShadowSoftness, 0.5, 4.0);
+        int   rad      = int(ceil(softness));
+        vec2  texel    = softness / vec2(textureSize(u_ShadowMap, 0).xy);
+        float count    = 0.0;
+        float sum      = 0.0;
+
+        for (int y = -rad; y <= rad; ++y)
+        {
+            for (int x = -rad; x <= rad; ++x)
+            {
+                float d = texture(u_ShadowMap,
+                                  vec3(projCoords.xy + vec2(x, y) * texel,
+                                       float(cascadeIdx))).r;
+                sum   += (depth > d) ? 0.0 : 1.0;
+                count += 1.0;
+            }
+        }
+        shadow = sum / max(count, 1.0);
+    }
+
+    // Fade-out у MaxShadowDistance
+    if (viewZ > u_MaxShadowDistance - u_FadeOutDistance)
+    {
+        float fade = 1.0 - (viewZ - (u_MaxShadowDistance - u_FadeOutDistance))
+                           / max(u_FadeOutDistance, 1e-3);
+        shadow = mix(1.0, shadow, clamp(fade, 0.0, 1.0));
+    }
+
+    return mix(1.0, shadow, u_ShadowStrength);
+}
+
+// ============================================================================
+// main
+// ============================================================================
 void main()
 {
     vec3  worldPos = texture(u_PositionTexture, v_UV).rgb;
@@ -189,7 +279,7 @@ void main()
     float skyReflStrength = max(mat.a, 0.0);
 
     // ============================================================
-    // UNLIT — просто albedo, без света, IBL, теней и fog.
+    // UNLIT — только albedo * (1 + emissive), без света
     // ============================================================
     if (isUnlit)
     {
@@ -200,7 +290,7 @@ void main()
     }
 
     // ============================================================
-    // SKY BRANCH — с экранным outline
+    // SKY
     // ============================================================
     if (dot(Nraw, Nraw) < 1e-4)
     {
@@ -224,6 +314,8 @@ void main()
     vec3 N = normalize(Nraw);
     vec3 V = normalize(u_CameraPosition - worldPos);
     vec3 Lo = vec3(0.0);
+
+    const float viewZ = -(u_ViewMatrix * vec4(worldPos, 1.0)).z;
 
     for (int i = 0; i < u_LightCount; ++i)
     {
@@ -260,9 +352,14 @@ void main()
                      * spot;
         }
 
-        Lo += EvaluateBRDF(N, V, L, radiance, albedo, metallic, roughness);
+        float lightShadow = 1.0;
+        if (i == u_ShadowLightIndex && u_ShadowMode != 0)
+            lightShadow = SampleShadow(worldPos, N, L, viewZ);
+
+        Lo += EvaluateBRDF(N, V, L, radiance, albedo, metallic, roughness) * lightShadow;
     }
 
+    // ---- Ambient / IBL --------------------------------------------------
     vec3 skyColor    = vec3(0.35, 0.42, 0.55);
     vec3 groundColor = vec3(0.12, 0.10, 0.08);
     float hemi       = N.y * 0.5 + 0.5;
@@ -290,6 +387,7 @@ void main()
 
     vec3 color = ambient + Lo + albedo * emissive;
 
+    // ---- Fog ------------------------------------------------------------
     if (u_FogEnabled == 1)
     {
         const float dist = length(u_CameraPosition - worldPos);
@@ -314,9 +412,7 @@ void main()
         color = mix(color, fogLinear, clamp(fog, 0.0, 1.0));
     }
 
-    // ============================================================
-    // OUTLINE — экранный dilate поверх сцены и неба
-    // ============================================================
+    // ---- Outline --------------------------------------------------------
     color = OutlineComposite(color, v_UV);
 
     FragColor = vec4(color, 1.0);

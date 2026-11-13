@@ -654,7 +654,8 @@ void EditorUI::Draw()
         DrawMaterialEditor();
 
     PropertyWidgets::DrawFileBrowser();
-    DrawImportDialog();   // ← ДОБАВЛЕНО
+    DrawImportDialog();
+    DrawShadowSettingsWindow();
 
     for (auto& cb : m_ExtraPanelDrawers)
         if (cb) cb();
@@ -883,11 +884,11 @@ void EditorUI::DrawLightGizmos()
     {
         const glm::vec4 clip = viewProj * glm::vec4(p, 1.0f);
         if (clip.w <= 1e-4f)
-            return false;                      // точка за камерой
+            return false;
         const glm::vec3 ndc = glm::vec3(clip) / clip.w;
         if (ndc.x < -1.5f || ndc.x > 1.5f ||
             ndc.y < -1.5f || ndc.y > 1.5f)
-            return false;                      // далеко за краями
+            return false;
         out.x = vpPos.x + ( ndc.x * 0.5f + 0.5f) * vpSize.x;
         out.y = vpPos.y + (-ndc.y * 0.5f + 0.5f) * vpSize.y;
         return true;
@@ -907,7 +908,7 @@ void EditorUI::DrawLightGizmos()
                 if (prevOk) dl->AddLine(prev, sp, color, thick);
                 prev = sp; prevOk = true;
             }
-            else prevOk = false;               // разрыв линии за камерой/экраном
+            else prevOk = false;
         }
     };
 
@@ -938,8 +939,7 @@ void EditorUI::DrawLightGizmos()
             !m_Registry.get<EntityFlags>(entity).Enabled)
             continue;
 
-        // Гизмо рисуем ТОЛЬКО для выделенных светов — иначе сцена из
-        // десятка point-ламп превращается в кашу из сфер.
+        // Гизмо рисуем ТОЛЬКО для выделенных светов
         const bool selected = (m_SelectedEntity == entity) ||
                               (m_SelectedEntities.count(entity) > 0);
         if (!selected)
@@ -964,7 +964,6 @@ void EditorUI::DrawLightGizmos()
 
         if (lc.Type == LightType::Point)
         {
-            // 3 больших окружности — сфера range
             const float r = glm::max(lc.Range, 0.01f);
             drawCircle3D(tr.Position, r, {1,0,0}, {0,1,0}, dim, 1.0f);
             drawCircle3D(tr.Position, r, {0,1,0}, {0,0,1}, dim, 1.0f);
@@ -977,7 +976,6 @@ void EditorUI::DrawLightGizmos()
             const glm::vec3 fwd =
                 glm::normalize(tr.Rotation * glm::vec3(0.0f, 0.0f, -1.0f));
 
-            // Базис перпендикулярный fwd
             const glm::vec3 upRef = (std::abs(fwd.y) < 0.99f)
                 ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
             const glm::vec3 right = glm::normalize(glm::cross(fwd, upRef));
@@ -991,11 +989,9 @@ void EditorUI::DrawLightGizmos()
 
             const glm::vec3 baseC = tr.Position + fwd * range;
 
-            // Base-круги конусов
             drawCircle3D(baseC, outerR, right, up, dim, 1.0f);
             drawCircle3D(baseC, innerR, right, up, dim, 1.0f, 32);
 
-            // 4 боковые образующие внешнего конуса
             for (int i = 0; i < 4; ++i)
             {
                 const float a = 0.5f * 3.14159265f * float(i);
@@ -1004,7 +1000,6 @@ void EditorUI::DrawLightGizmos()
                 drawPolyline({ tr.Position, edge }, dim, 1.0f);
             }
 
-            // Центральная ось
             drawPolyline({ tr.Position, baseC }, color, 1.5f);
 
             if (iconVisible) drawCross(iconPos, color, 6.0f);
@@ -1018,7 +1013,6 @@ void EditorUI::DrawLightGizmos()
             const glm::vec3 head = tr.Position + fwd * len * 0.5f;
             drawPolyline({ tail, head }, color, 2.0f);
 
-            // Маленькая «голова» стрелки
             const glm::vec3 upRef = (std::abs(fwd.y) < 0.99f)
                 ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
             const glm::vec3 right = glm::normalize(glm::cross(fwd, upRef));
@@ -1201,12 +1195,19 @@ void EditorUI::DrawHierarchy()
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_MenuBar);
 
     // ======================= Menu bar (File) ============================
+    // ======================= Menu bar (File + Settings) =================
     if (ImGui::BeginMenuBar())
     {
         if (ImGui::BeginMenu("File"))
         {
             if (ImGui::MenuItem("Save", "Ctrl+S")) SaveScene();
             if (ImGui::MenuItem("Load", "Ctrl+O")) LoadScene();
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Settings"))
+        {
+            if (ImGui::MenuItem("Shadow Settings"))
+                m_ShowShadowSettings = true;
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -1710,7 +1711,77 @@ void EditorUI::DrawAddComponentMenu()
 
 
 
+void EditorUI::DrawShadowSettingsWindow()
+{
+    if (!m_ShowShadowSettings) return;
+    if (!m_ShadowSettings)     return;
 
+    ImGui::SetNextWindowSize(ImVec2(460, 560), ImGuiCond_FirstUseEver);
+    bool open = m_ShowShadowSettings;
+
+    if (ImGui::Begin("Shadow Settings", &open, ImGuiWindowFlags_NoCollapse))
+    {
+        auto& s = *m_ShadowSettings;
+        bool changed = false;
+
+        changed |= ImGui::Checkbox("Enabled", &s.Enabled);
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Cascaded Shadow Maps (Directional)");
+
+        const char* cascadeItems[] = { "1", "2", "3", "4" };
+        int cascadeIdx = glm::clamp(s.CascadeCount - 1, 0, 3);
+        if (ImGui::Combo("Cascade Count", &cascadeIdx, cascadeItems, 4))
+        {
+            s.CascadeCount = cascadeIdx + 1;
+            changed = true;
+        }
+
+        const int   resVals[]  = { 512, 1024, 2048, 4096 };
+        const char* resItems[] = { "512", "1024", "2048", "4096" };
+        int resIdx = 2;
+        for (int i = 0; i < 4; ++i)
+            if (s.GlobalResolution == resVals[i]) { resIdx = i; break; }
+        if (ImGui::Combo("Resolution", &resIdx, resItems, 4))
+        {
+            s.GlobalResolution = resVals[resIdx];
+            changed = true;
+        }
+
+        changed |= ImGui::SliderFloat("Max Distance", &s.MaxShadowDistance, 5.0f, 500.0f, "%.1f m");
+        changed |= ImGui::SliderFloat("Split Lambda", &s.CascadeSplitLambda, 0.0f, 1.0f);
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Bias & Filtering");
+        changed |= ImGui::SliderFloat("Depth Bias",  &s.DepthBias,     0.0f, 0.02f, "%.5f");
+        changed |= ImGui::SliderFloat("Normal Bias", &s.NormalBias,    0.0f, 0.20f, "%.4f");
+        changed |= ImGui::SliderFloat("Softness",    &s.ShadowSoftness, 0.0f, 4.0f);
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Fade Out");
+        changed |= ImGui::SliderFloat("Fade Out Distance", &s.FadeOutDistance, 0.0f, 100.0f);
+
+        ImGui::Separator();
+        if (ImGui::Button("Save", ImVec2(120, 0)))
+        {
+            ShadowSettingsSerializer::Save(s, Paths::Resolve(AssetFiles::kShadowsFile));
+            Notify(ImGuiToastType_Success, 2000, "Shadow settings saved");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reset Defaults", ImVec2(150, 0)))
+        {
+            s = ShadowSettings{};
+            ShadowSettingsSerializer::Save(s, Paths::Resolve(AssetFiles::kShadowsFile));
+            Notify(ImGuiToastType_Info, 2000, "Shadow settings reset");
+        }
+
+        // Автосохранение на любое изменение (тихо, без toast-спама)
+        if (changed)
+            ShadowSettingsSerializer::Save(s, Paths::Resolve(AssetFiles::kShadowsFile));
+    }
+    ImGui::End();
+    m_ShowShadowSettings = open;
+}
 
 void EditorUI::DrawMaterialEditor()
 {
@@ -1940,40 +2011,11 @@ entt::entity EditorUI::DuplicateSingle(entt::entity src)
 
     if (m_Registry.any_of<EditorCameraComponent>(dst))
         m_Registry.remove<EditorCameraComponent>(dst);
-
-    
-    // Копируем MeshComponent ПОЛНОСТЬЮ — включая SourcePath.
-    // Без SourcePath дубликат после рестарта движка не найдёт .bxmesh-кэш
-    // и останется с kInvalidMesh (PropertySerializer не сериализует
-    // MeshId, т.к. он Transient, поэтому патчим вручную).
-    // Дубликат ДЕЛИТ материал с оригиналом — копию не создаём.
-    // Если пользователь захочет независимый материал — в Inspector есть
-    // кнопка "Make Unique", которая явно клонирует.
+ 
     if (m_Registry.any_of<MaterialComponent>(src))
     {
         const auto srcH = m_Registry.get<MaterialComponent>(src).MaterialId;
         m_Registry.get_or_emplace<MaterialComponent>(dst).MaterialId = srcH;
-    }
-
-    
-    if (m_Registry.any_of<MaterialComponent>(src))
-    {
-        auto srcH = m_Registry.get<MaterialComponent>(src).MaterialId;
-        if (MaterialLibrary::Get().IsValid(srcH))
-        {
-            std::string baseName = MaterialLibrary::Get().GetName(srcH);
-            std::string newName  = baseName + "_copy";
-            int suffix = 1;
-            while (MaterialLibrary::Get().Find(newName) != kInvalidMaterial)
-                newName = baseName + "_copy" + std::to_string(suffix++);
-
-            MaterialHandle nh = MaterialLibrary::Get().Copy(newName, srcH);
-            MaterialLibrary::Get().Flush();
-
-            if (!m_Registry.any_of<MaterialComponent>(dst))
-                m_Registry.emplace<MaterialComponent>(dst);
-            m_Registry.get<MaterialComponent>(dst).MaterialId = nh;
-        }
     }
 
     if (m_Registry.any_of<CameraComponent>(dst))
@@ -1984,6 +2026,16 @@ entt::entity EditorUI::DuplicateSingle(entt::entity src)
         
         m_Registry.get<NameComponent>(dst).Name =
             MakeUniqueName(m_Registry.get<NameComponent>(dst).Name);
+    }
+
+        if (m_Registry.any_of<MeshComponent>(src))
+    {
+        if (!m_Registry.any_of<MeshComponent>(dst))
+            m_Registry.emplace<MeshComponent>(dst);
+        auto&       dstMc = m_Registry.get<MeshComponent>(dst);
+        const auto& srcMc = m_Registry.get<MeshComponent>(src);
+        dstMc.MeshId     = srcMc.MeshId;
+        dstMc.SourcePath = srcMc.SourcePath;
     }
 
     return dst;

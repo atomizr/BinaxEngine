@@ -167,6 +167,9 @@ public:
             gpu.InnerCutoff = lc.InnerCutoff;
             gpu.OuterCutoff = lc.OuterCutoff;
             gpu.Direction   = tr.Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+            gpu.ShadowMode     = static_cast<int>(lc.ShadowMode);
+            gpu.ShadowStrength = lc.ShadowStrength;
+            gpu.BiasMultiplier = lc.BiasMultiplier;
 
             switch (lc.Type)
             {

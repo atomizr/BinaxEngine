@@ -80,6 +80,9 @@ struct PropertyInfo
     PropertyInfo& SetReadOnly()                      { ReadOnly  = true; return *this; }
     PropertyInfo& SetTransient()                     { Transient = true; return *this; }
     PropertyInfo& SetAssetType(std::string t)        { AssetType = std::move(t); return *this; }
+    std::function<bool(const void*)> VisibleWhen;   // nullptr = всегда видим
+        PropertyInfo& SetVisibleWhen(std::function<bool(const void*)> pred)
+    { VisibleWhen = std::move(pred); return *this; }
 };
 
 struct ClassInfo

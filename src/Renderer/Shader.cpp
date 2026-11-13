@@ -207,4 +207,13 @@ uint32_t Shader::CompileShader(uint32_t type, const std::string& source)
     return shader;
 }
 
+void Shader::SetMat4Array(const std::string& name, const glm::mat4* mats, int count)
+{
+    glUniformMatrix4fv(GetUniformLocation(name + "[0]"), count, GL_FALSE, &mats[0][0][0]);
+}
+void Shader::SetFloatArray(const std::string& name, const float* vals, int count)
+{
+    glUniform1fv(GetUniformLocation(name + "[0]"), count, vals);
+}
+
 } 

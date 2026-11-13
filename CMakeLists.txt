@@ -44,6 +44,8 @@ set(SOURCES
     src/Renderer/Cubemap.cpp
     src/Renderer/im_anim.cpp
     src/Renderer/MeshImporter.cpp
+    src/Renderer/ShadowSettings.cpp
+    src/Renderer/ShadowMap.cpp
 
     src/Editor/EditorUI.cpp
     src/Editor/EditorCamera.cpp

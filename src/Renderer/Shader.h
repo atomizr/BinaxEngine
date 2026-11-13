@@ -50,6 +50,8 @@ public:
     void Reload();
 
     Stage GetStage() const { return m_Stage; }
+    void SetMat4Array (const std::string& name, const glm::mat4* mats, int count);
+    void SetFloatArray(const std::string& name, const float* vals, int count);
 
 private:
     uint32_t m_RendererID = 0;

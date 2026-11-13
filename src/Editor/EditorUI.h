@@ -15,6 +15,7 @@
 #include "Renderer/MaterialLibrary.h"
 #include "Renderer/MeshLibrary.h"
 #include "Renderer/MeshImporter.h"
+#include "Renderer/ShadowSettings.h"
 #include "ECS/Components/EntityFlags.h"
 #include "ECS/Components/LightComponent.h"
 
@@ -57,6 +58,7 @@ public:
     bool CanRedo() const { return m_UndoCursor + 1 < (int)m_UndoStates.size(); }
     void Undo();
     void Redo();
+    void SetShadowSettingsPtr(ShadowSettings* s) { m_ShadowSettings = s; }
     using PickCallback = std::function<entt::entity(ImVec2 uv)>;
     void SetPickCallback(PickCallback cb) { m_PickCallback = std::move(cb); }
     entt::entity GetSelectedEntity() const { return m_SelectedEntity; }
@@ -125,7 +127,7 @@ private:
     void FocusOnSelection();
     std::string MakeUniqueName(const std::string& sourceName) const;
     bool IsNameTaken(const std::string& name) const;
-    void ImportMeshFromFile(const std::string& path);   // ← ДОБАВИТЬ
+    void ImportMeshFromFile(const std::string& path);
     void InitComponentFactory();
     void AddComponentToEntity(entt::entity entity, const std::string& componentName);
     void RemoveComponentFromEntity(entt::entity entity, const std::string& componentName);
@@ -147,7 +149,8 @@ private:
     void RecordUndo();
     std::string CaptureScene() const;
     void RestoreScene(const std::string& state);
-        // ---- Import dialog ------------------------------------------------------
+
+    // ---- Import dialog ------------------------------------------------------
     enum class ImportScaleMode { AutoFit, Original, Custom };
 
     struct PendingImportState
@@ -161,17 +164,20 @@ private:
         bool            Recenter    = true;
         bool            OpenPopupRequested = false;
 
-        // UV / нормали — пост-обработка после assimp
-        bool FlipUV_U    = false;   // U = 1 - U
-        bool FlipUV_V    = false;   // V = 1 - V  (по умолчанию ВЫКЛ — см. MeshImporter)
-        bool FlipNormals = false;   // N = -N  (если модель «вывернута наизнанку»)
+        bool FlipUV_U    = false;
+        bool FlipUV_V    = false;
+        bool FlipNormals = false;
     } m_PendingImport;
 
     void DrawImportDialog();
     void ExecutePendingImport();
     void CreateEmptyEntity();
     void CreateCubeEntity();
-    void CreateLightEntity(LightType type);   // Directional / Spot / Point
+    void CreateLightEntity(LightType type);
+
+    ShadowSettings* m_ShadowSettings = nullptr;
+    bool m_ShowShadowSettings = false;
+    void DrawShadowSettingsWindow();
 };
 
 }

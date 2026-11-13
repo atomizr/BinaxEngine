@@ -16,6 +16,8 @@
 #include "Renderer/MaterialLibrary.h"
 #include "Renderer/MeshLibrary.h"
 #include "Renderer/Shader.h"
+#include "Renderer/ShadowMap.h"
+#include "Renderer/ShadowSettings.h"
 
 #include "ECS/Systems/RenderSystem.h"
 
@@ -153,6 +155,11 @@ public:
                            const glm::mat4& viewMatrix,
                            const glm::mat4& projectionMatrix,
                            uint32_t width, uint32_t height);
+    void RenderShadowPass(FrameRenderData& frame,
+                          const glm::mat4& camView,
+                          const glm::mat4& camProj,
+                          const std::vector<GPULight>& lights,
+                          const ShadowSettings& settings);
 
 private:
     static constexpr uint32_t kCullGroupSize = 64;
@@ -263,6 +270,38 @@ private:
                    uint32_t targetFBO,
                    uint32_t width, uint32_t height,
                    const FXAAParams& params);
+        std::unique_ptr<Shader> m_ShadowDepthShader;
+    ShadowMap               m_ShadowMap;
+    uint32_t                m_ShadowIndirectSSBO = 0;
+    uint32_t                m_ShadowIndirectCapacity = 0;
+
+    struct ShadowCasterInfo
+    {
+        int   LightIndex = -1;
+        int   ShadowMode = 0;
+        int   CascadeCount = 0;
+        float ShadowStrength = 1.0f;
+        float BiasMultiplier = 1.0f;
+        float MaxShadowDistance = 0.0f;
+        float FadeOutDistance = 0.0f;
+        float DepthBias = 0.0f;
+        float NormalBias = 0.0f;
+        float ShadowSoftness = 1.0f;
+        glm::mat4 LightSpaceMatrices[4]{};
+        float CascadeSplits[4]{};
+    };
+    ShadowCasterInfo m_ShadowCaster;
+
+    void EnsureShadowMap(uint32_t size, uint32_t layers);
+    void EnsureShadowDrawBuffers(uint32_t drawCount);
+    void ComputeCascades(const glm::mat4& camView,
+                         float nearPlane, float farPlane,
+                         float fovY, float aspect,
+                         const glm::vec3& lightDir,
+                         const ShadowSettings& settings,
+                         int cascadeCount,
+                         float* splits,
+                         glm::mat4* outMatrices);
 };
 
 }
