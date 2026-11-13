@@ -179,7 +179,11 @@ bool SceneSerializer::DeserializeFromString(entt::registry& registry,
         return false;
     }
 
+    // Снимаем бэкап ДО каких-либо разрушений. Это гарантирует,
+    // что при любом сбое ниже мы восстановим ровно то, что было.
+    const std::string backup = SerializeToString(registry);
 
+    // Уничтожаем все non-system сущности
     std::vector<entt::entity> toDestroy;
     for (auto e : registry.storage<entt::entity>())
     {
@@ -191,9 +195,7 @@ bool SceneSerializer::DeserializeFromString(entt::registry& registry,
 
     const auto entitiesIt = root.find("entities");
     if (entitiesIt == root.end() || entitiesIt->empty())
-    {
         return true;
-    }
 
     std::vector<std::pair<entt::entity, const nlohmann::json*>> created;
     created.reserve(entitiesIt->size());
@@ -211,6 +213,7 @@ bool SceneSerializer::DeserializeFromString(entt::registry& registry,
         created.emplace_back(entity, &entityJson);
     }
 
+    bool applyOk = true;
     try
     {
         for (auto& [entity, entityJson] : created)
@@ -219,10 +222,30 @@ bool SceneSerializer::DeserializeFromString(entt::registry& registry,
     catch (const std::exception& e)
     {
         BINAX_LOG_ERROR("Failed to load entities from JSON: {0}", e.what());
+        applyOk = false;
+    }
+
+    if (!applyOk)
+    {
+        // Защита от бесконечной рекурсии, если бэкап окажется невалидным
+        static thread_local bool s_IsRestoring = false;
+        if (s_IsRestoring)
+        {
+            BINAX_LOG_CRITICAL("Restore-from-backup also failed — scene is broken");
+            return false;
+        }
+
+        BINAX_LOG_WARN("Restoring previous scene after failed load");
+        s_IsRestoring = true;
+        const bool restored = DeserializeFromString(registry, backup);
+        s_IsRestoring = false;
+
+        if (!restored)
+            BINAX_LOG_CRITICAL("Restore-from-backup failed — scene is broken");
         return false;
     }
 
-
+    // Привязка родителей
     for (auto& [entity, entityJson] : created)
     {
         const int parentId = Int(*entityJson, "parent", -1);

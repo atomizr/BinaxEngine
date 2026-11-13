@@ -759,7 +759,9 @@ void EditorUI::DrawViewport()
         m_ViewportScreenW = vpSize.x;
         m_ViewportScreenH = vpSize.y;
 
-        m_ViewportHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+        m_ViewportHovered = ImGui::IsMouseHoveringRect(
+                        vpPos, ImVec2(vpPos.x + vpSize.x, vpPos.y + vpSize.y))
+                    && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
 
         if (vpSize.x > 0 && vpSize.y > 0)
         {

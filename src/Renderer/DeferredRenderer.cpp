@@ -490,8 +490,9 @@ void DeferredRenderer::PrepareCullPass(const glm::mat4& viewMatrix,
         m_CullShader->SetVec4(name, frustum.Planes[i]);
     }
     
-    m_CullShader->SetUInt("u_GroupCount", groupCount);
-    m_CullShader->SetUInt("u_MaxDraws",   groupCount);
+m_CullShader->SetUInt("u_GroupCount", groupCount);
+m_CullShader->SetUInt("u_MaxDraws",   groupCount);
+m_CullShader->SetUInt("u_MeshCount",  MeshLibrary::Get().GetMeshCount());
 
     
     glDispatchCompute(groupCount, 1, 1);
@@ -992,15 +993,24 @@ void DeferredRenderer::RenderOutlinePass(const FrameRenderData& frame,
     if (selectedEntities.empty())
         return;
 
-    EnsurePostTargets(width ? width : m_GBuffer->GetWidth(),
-                      height ? height : m_GBuffer->GetHeight());
+    // Резолвим размеры ОДИН раз и используем везде
+    const uint32_t targetW = width  ? width  : m_GBuffer->GetWidth();
+    const uint32_t targetH = height ? height : m_GBuffer->GetHeight();
+    if (targetW == 0 || targetH == 0)
+        return;
+
+    EnsurePostTargets(targetW, targetH);
+
+    // Сохраняем глобальный clear-color — мы его временно меняем
+    GLfloat prevClearColor[4];
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClearColor);
 
     m_OutlineFBO->Bind();
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                            GL_TEXTURE_2D,
                            m_GBuffer->GetDepthAttachment(), 0);
 
-    glViewport(0, 0, (GLsizei)width, (GLsizei)height);
+    glViewport(0, 0, (GLsizei)targetW, (GLsizei)targetH);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -1019,12 +1029,10 @@ void DeferredRenderer::RenderOutlinePass(const FrameRenderData& frame,
 
     MeshLibrary::Get().BindVAO();
 
-
     bool anyDrawn = false;
     for (entt::entity sel : selectedEntities)
     {
         if (sel == entt::null) continue;
-
 
         int selectedIdx = -1;
         for (size_t i = 0; i < frame.InstanceEntities.size(); ++i)
@@ -1038,7 +1046,9 @@ void DeferredRenderer::RenderOutlinePass(const FrameRenderData& frame,
         if (selectedIdx < 0) continue;
 
         const InstanceGPU& inst = frame.Instances[selectedIdx];
-        const MeshGPU&     mesh = MeshLibrary::Get().Get(inst.MeshId);
+        if (!MeshLibrary::Get().IsValid(inst.MeshId))
+            continue;
+        const MeshGPU& mesh = MeshLibrary::Get().Get(inst.MeshId);
         if (mesh.IndexCount == 0) continue;
 
         m_OutlineShader->SetMat4("u_Model", inst.Model);
@@ -1060,6 +1070,11 @@ void DeferredRenderer::RenderOutlinePass(const FrameRenderData& frame,
     glDisable(GL_POLYGON_OFFSET_FILL);
     glDepthMask(GL_TRUE);
     m_OutlineFBO->Unbind();
+
+    // Возвращаем глобальный clear-color — иначе главный framebuffer
+    // будет очищаться прозрачным чёрным, а не 0.08/0.08/0.10 из main.cpp
+    glClearColor(prevClearColor[0], prevClearColor[1],
+                 prevClearColor[2], prevClearColor[3]);
 
     m_HasOutline = anyDrawn;
 }
@@ -1087,6 +1102,7 @@ void DeferredRenderer::ReloadShaders()
     reloadSafe(m_MotionBlurShader);
     reloadSafe(m_BloomDownShader);
     reloadSafe(m_BloomUpShader);
+    reloadSafe(m_OutlineShader);   // ← ДОБАВЛЕНО
 
     BINAX_LOG_INFO("Shaders reloaded from disk");
 }

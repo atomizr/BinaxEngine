@@ -5,7 +5,7 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 struct InstanceGPU {
     mat4 Model;
     mat4 PrevModel;
-    mat4 NormalMatrix;   
+    mat4 NormalMatrix;
     uint MaterialId;
     uint MeshId;
     uint BoneOffset;
@@ -57,11 +57,13 @@ layout(std430, binding = 8) readonly buffer GroupTemplates {
 uniform vec4 u_Frustum[6];
 uniform uint u_GroupCount;
 uniform uint u_MaxDraws;
+uniform uint u_MeshCount;   // NEW: количество валидных мешей (для OOB-защиты)
 
 const uint kInstanceFlagSkinned = 1u;
 
 shared uint s_anyVisible;
-shared uint s_visibleCount;   
+shared uint s_visibleCount;
+shared uint s_meshIndex;       // NEW: индекс меша группы (читаем один раз)
 
 void main()
 {
@@ -78,17 +80,29 @@ void main()
     const uint lane   = gl_LocalInvocationID.x;
     const uint stride = gl_WorkGroupSize.x;
 
+    // Читаем MeshId группы один раз — все инстансы в группе имеют один MeshId
+    const uint meshIdx = instances[base].MeshId;
+
+    // Защита от OOB: если MeshId невалиден — группу целиком скипаем.
+    // Это защищает и от гонки: MeshLibrary мог обновиться асинхронно,
+    // и CPU-валидация в BuildFrameData уже неактуальна.
+    if (meshIdx >= u_MeshCount)
+        return;
+
     if (lane == 0u) {
         s_anyVisible   = 0u;
         s_visibleCount = 0u;
+        s_meshIndex    = meshIdx;
     }
     barrier();
+
+    const uint safeMeshIdx = s_meshIndex;
+    const MeshGPU mesh = meshes[safeMeshIdx];
 
     for (uint i = lane; i < count; i += stride)
     {
         const uint instanceIndex = base + i;
         const InstanceGPU inst = instances[instanceIndex];
-        const MeshGPU    mesh = meshes[inst.MeshId];
 
         bool visible = ((inst.Flags & kInstanceFlagSkinned) != 0u);
 
@@ -117,7 +131,7 @@ void main()
 
         if (visible) {
             atomicOr(s_anyVisible, 1u);
-            atomicAdd(s_visibleCount, 1u);   
+            atomicAdd(s_visibleCount, 1u);
         }
     }
     barrier();
@@ -130,11 +144,8 @@ void main()
 
         draws[slot] = tpl;
 
-        const MeshGPU m = meshes[instances[base].MeshId];
-
-        
-        atomicAdd(vertexCount,          m.VertexCount * s_visibleCount);
-        atomicAdd(indexCount,           m.IndexCount  * s_visibleCount);
+        atomicAdd(vertexCount,          mesh.VertexCount * s_visibleCount);
+        atomicAdd(indexCount,           mesh.IndexCount  * s_visibleCount);
         atomicAdd(visibleInstanceCount, s_visibleCount);
     }
 }

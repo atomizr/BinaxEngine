@@ -17,9 +17,9 @@ struct LightComponent
     LightType Type = LightType::Directional;
     glm::vec3 Color = glm::vec3(1.0f);
     float Intensity = 1.0f;
-    float Range = 10.0f;      
-    float InnerCutoff = 0.8f; 
-    float OuterCutoff = 0.9f; 
+    float Range = 10.0f;
+    float InnerCutoff = 0.9f;   // ← было 0.8f
+    float OuterCutoff = 0.8f;   // ← было 0.9f
 };
 
 } 
