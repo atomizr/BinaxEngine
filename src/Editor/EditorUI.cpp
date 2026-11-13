@@ -747,6 +747,12 @@ void EditorUI::DrawViewport()
         ImGui::Checkbox("Snap", &m_SnapEnabled);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Grid snapping for the current gizmo mode");
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        ImGui::Checkbox("Lights", &m_ShowLightGizmos);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Show debug wireframes for point / spot / directional lights");
 
         if (m_SnapEnabled)
         {
@@ -808,6 +814,9 @@ void EditorUI::DrawViewport()
 
         ViewportFocusGlow();
 
+        // Debug-сетки светов рисуем ДО ImGuizmo, чтобы ручки гизмо
+        // оказались сверху и не перекрывались конусами/окружностями.
+        DrawLightGizmos();
 
         if (m_ViewportHovered || ImGuizmo::IsUsing())
             DrawGizmo();
@@ -856,6 +865,172 @@ float& EditorUI::SnapStep()
     case 1:  return m_SnapRotate;    
     case 2:  return m_SnapScale;     
     default: return m_SnapTranslate; 
+    }
+}
+
+void EditorUI::DrawLightGizmos()
+{
+    if (!m_ShowLightGizmos) return;
+    if (!m_Viewport)        return;
+
+    const ImVec2 vpPos (m_ViewportScreenX, m_ViewportScreenY);
+    const ImVec2 vpSize(m_ViewportScreenW, m_ViewportScreenH);
+    if (vpSize.x <= 0.0f || vpSize.y <= 0.0f) return;
+
+    const glm::mat4 viewProj = m_ProjectionMatrix * m_ViewMatrix;
+
+    auto worldToScreen = [&](const glm::vec3& p, ImVec2& out) -> bool
+    {
+        const glm::vec4 clip = viewProj * glm::vec4(p, 1.0f);
+        if (clip.w <= 1e-4f)
+            return false;                      // точка за камерой
+        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        if (ndc.x < -1.5f || ndc.x > 1.5f ||
+            ndc.y < -1.5f || ndc.y > 1.5f)
+            return false;                      // далеко за краями
+        out.x = vpPos.x + ( ndc.x * 0.5f + 0.5f) * vpSize.x;
+        out.y = vpPos.y + (-ndc.y * 0.5f + 0.5f) * vpSize.y;
+        return true;
+    };
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    auto drawPolyline = [&](const std::vector<glm::vec3>& pts,
+                            ImU32 color, float thick)
+    {
+        ImVec2 prev; bool prevOk = false;
+        for (const auto& p : pts)
+        {
+            ImVec2 sp;
+            if (worldToScreen(p, sp))
+            {
+                if (prevOk) dl->AddLine(prev, sp, color, thick);
+                prev = sp; prevOk = true;
+            }
+            else prevOk = false;               // разрыв линии за камерой/экраном
+        }
+    };
+
+    auto drawCircle3D = [&](const glm::vec3& c, float r,
+                            const glm::vec3& a1, const glm::vec3& a2,
+                            ImU32 color, float thick, int seg = 48)
+    {
+        std::vector<glm::vec3> pts;
+        pts.reserve(seg + 1);
+        for (int i = 0; i <= seg; ++i)
+        {
+            const float t = 2.0f * 3.14159265f * float(i) / float(seg);
+            pts.push_back(c + r * (std::cos(t) * a1 + std::sin(t) * a2));
+        }
+        drawPolyline(pts, color, thick);
+    };
+
+    auto drawCross = [&](const ImVec2& p, ImU32 color, float size)
+    {
+        dl->AddLine(ImVec2(p.x - size, p.y), ImVec2(p.x + size, p.y), color, 1.5f);
+        dl->AddLine(ImVec2(p.x, p.y - size), ImVec2(p.x, p.y + size), color, 1.5f);
+    };
+
+    auto view = m_Registry.view<Transform, LightComponent>();
+    for (auto entity : view)
+    {
+        if (m_Registry.any_of<EntityFlags>(entity) &&
+            !m_Registry.get<EntityFlags>(entity).Enabled)
+            continue;
+
+        // Гизмо рисуем ТОЛЬКО для выделенных светов — иначе сцена из
+        // десятка point-ламп превращается в кашу из сфер.
+        const bool selected = (m_SelectedEntity == entity) ||
+                              (m_SelectedEntities.count(entity) > 0);
+        if (!selected)
+            continue;
+
+        const auto& tr = view.get<Transform>(entity);
+        const auto& lc = view.get<LightComponent>(entity);
+
+        const ImU32 color = IM_COL32(
+            int(lc.Color.x * 255.0f),
+            int(lc.Color.y * 255.0f),
+            int(lc.Color.z * 255.0f),
+            selected ? 255 : 180);
+        const ImU32 dim = IM_COL32(
+            int(lc.Color.x * 255.0f),
+            int(lc.Color.y * 255.0f),
+            int(lc.Color.z * 255.0f),
+            selected ? 160 : 90);
+
+        ImVec2 iconPos;
+        const bool iconVisible = worldToScreen(tr.Position, iconPos);
+
+        if (lc.Type == LightType::Point)
+        {
+            // 3 больших окружности — сфера range
+            const float r = glm::max(lc.Range, 0.01f);
+            drawCircle3D(tr.Position, r, {1,0,0}, {0,1,0}, dim, 1.0f);
+            drawCircle3D(tr.Position, r, {0,1,0}, {0,0,1}, dim, 1.0f);
+            drawCircle3D(tr.Position, r, {1,0,0}, {0,0,1}, dim, 1.0f);
+
+            if (iconVisible) drawCross(iconPos, color, 6.0f);
+        }
+        else if (lc.Type == LightType::Spot)
+        {
+            const glm::vec3 fwd =
+                glm::normalize(tr.Rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+
+            // Базис перпендикулярный fwd
+            const glm::vec3 upRef = (std::abs(fwd.y) < 0.99f)
+                ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
+            const glm::vec3 right = glm::normalize(glm::cross(fwd, upRef));
+            const glm::vec3 up    = glm::normalize(glm::cross(right, fwd));
+
+            const float range    = glm::max(lc.Range, 0.01f);
+            const float outerAng = std::acos(glm::clamp(lc.OuterCutoff, -0.9999f, 0.9999f));
+            const float innerAng = std::acos(glm::clamp(lc.InnerCutoff, -0.9999f, 0.9999f));
+            const float outerR   = range * std::tan(outerAng);
+            const float innerR   = range * std::tan(innerAng);
+
+            const glm::vec3 baseC = tr.Position + fwd * range;
+
+            // Base-круги конусов
+            drawCircle3D(baseC, outerR, right, up, dim, 1.0f);
+            drawCircle3D(baseC, innerR, right, up, dim, 1.0f, 32);
+
+            // 4 боковые образующие внешнего конуса
+            for (int i = 0; i < 4; ++i)
+            {
+                const float a = 0.5f * 3.14159265f * float(i);
+                const glm::vec3 edge =
+                    baseC + outerR * (std::cos(a) * right + std::sin(a) * up);
+                drawPolyline({ tr.Position, edge }, dim, 1.0f);
+            }
+
+            // Центральная ось
+            drawPolyline({ tr.Position, baseC }, color, 1.5f);
+
+            if (iconVisible) drawCross(iconPos, color, 6.0f);
+        }
+        else // Directional
+        {
+            const glm::vec3 fwd =
+                glm::normalize(tr.Rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+            const float len  = 3.0f;
+            const glm::vec3 tail = tr.Position - fwd * len * 0.5f;
+            const glm::vec3 head = tr.Position + fwd * len * 0.5f;
+            drawPolyline({ tail, head }, color, 2.0f);
+
+            // Маленькая «голова» стрелки
+            const glm::vec3 upRef = (std::abs(fwd.y) < 0.99f)
+                ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
+            const glm::vec3 right = glm::normalize(glm::cross(fwd, upRef));
+            const glm::vec3 up    = glm::normalize(glm::cross(right, fwd));
+            const float hw = 0.15f * len;
+            drawPolyline({ head, head - fwd * hw + right * hw * 0.5f }, color, 1.5f);
+            drawPolyline({ head, head - fwd * hw - right * hw * 0.5f }, color, 1.5f);
+            drawPolyline({ head, head - fwd * hw + up * hw * 0.5f },    color, 1.5f);
+            drawPolyline({ head, head - fwd * hw - up * hw * 0.5f },    color, 1.5f);
+
+            if (iconVisible) drawCross(iconPos, color, 6.0f);
+        }
     }
 }
 

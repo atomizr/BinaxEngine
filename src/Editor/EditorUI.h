@@ -83,6 +83,7 @@ private:
     int m_GizmoOperation = 0;
     int m_GizmoMode      = 0;
     bool  m_SnapEnabled   = false;
+    bool  m_ShowLightGizmos = true;
     float m_SnapTranslate = 0.5f;
     float m_SnapRotate    = 15.0f;
     float m_SnapScale     = 0.1f;
@@ -107,6 +108,7 @@ private:
     void DrawInspector();
     void DrawViewport();
     void DrawGizmo();
+    void DrawLightGizmos();
     void DrawAddComponentMenu();
     void DrawCreateObjectDropdown();
     void DrawMaterialEditor();

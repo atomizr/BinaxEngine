@@ -177,16 +177,6 @@ public:
 
             out.push_back(gpu);
         }
-
-        if (out.empty())
-        {
-            GPULight def;
-            def.LightType = GPULight::Directional;
-            def.Direction = glm::normalize(glm::vec3(-1.0f, -1.0f, -1.0f));
-            def.Color     = glm::vec3(1.0f, 0.9f, 0.8f);
-            def.Intensity = 1.2f;
-            out.push_back(def);
-        }
     }
 
 
