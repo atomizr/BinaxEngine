@@ -82,8 +82,24 @@ void main()
     vec3 albedoTint = sRGBToLinear(m.AlbedoRoughness.rgb);
     vec3 baseColor  = albedoTint;
 
+    // ---- Alpha computation --------------------------------------------
+    float alpha = m.SkyReflParams.w;   // AlphaMultiplier (default 1.0)
     if (m.AlbedoHandle != kNoHandle)
-        baseColor *= texture(sampler2D(m.AlbedoHandle), uv).rgb * m.StrengthB.x;
+    {
+        vec4 albedoTex = texture(sampler2D(m.AlbedoHandle), uv);
+        baseColor *= albedoTex.rgb * m.StrengthB.x;
+        alpha     *= albedoTex.a;
+    }
+
+    const int blendMode = int(m.StrengthB.w + 0.5);
+
+    // Transparent — сюда не рисуем, уйдёт в forward pass
+    if (blendMode == 2)
+        discard;
+
+    // AlphaTest — foliage, заборы, решётки
+    if (blendMode == 1 && alpha < m.StrengthB.z)
+        discard;
 
     vec3 N = normalize(v_Normal);
 

@@ -32,6 +32,15 @@ struct FrameRenderData
     std::vector<entt::entity>         InstanceEntities;
     std::vector<DrawElementsIndirect> Draws;
     std::vector<uint32_t>             DrawVertexCounts;
+
+    // ---- Transparent (forward pass) -------------------------------------
+    struct TransparentInstance
+    {
+        entt::entity Entity       = entt::null;
+        InstanceGPU  GPU{};
+        float        DistanceSq   = 0.0f;
+    };
+    std::vector<TransparentInstance> TransparentInstances;
 };
 
 class RenderSystem
@@ -43,6 +52,7 @@ public:
         out.InstanceEntities.clear();
         out.Draws.clear();
         out.DrawVertexCounts.clear();
+        out.TransparentInstances.clear();
 
         struct Candidate
         {
@@ -91,6 +101,29 @@ public:
             const glm::mat4 prevModel = history.Valid ? history.PrevModel : model;
             history.PrevModel = model;
             history.Valid     = true;
+
+            // ---- Transparent → отдельный список -----------------------
+            const MaterialBlendMode bm =
+                MaterialLibrary::Get().GetBlendMode(mat);
+            if (bm == MaterialBlendMode::Transparent)
+            {
+                InstanceGPU g{};
+                g.Model        = model;
+                g.PrevModel    = prevModel;
+                g.NormalMatrix = glm::inverseTranspose(model);
+                g.MaterialId   = mat;
+                g.MeshId       = mc.MeshId;
+                g.BoneOffset   = 0;
+                g.Flags        = InstanceFlags::None;
+
+                FrameRenderData::TransparentInstance ti;
+                ti.Entity = e;
+                ti.GPU    = g;
+                const glm::vec3 worldPos(model[3]);
+                ti.DistanceSq = glm::dot(worldPos, worldPos);
+                out.TransparentInstances.push_back(ti);
+                continue;
+            }
 
             cands.push_back({ e, mc.MeshId, mat, model, prevModel });
         }

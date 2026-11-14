@@ -1839,6 +1839,56 @@ void EditorUI::DrawMaterialEditor()
                 MaterialLibrary::Get().MarkDirty();
         }
 
+                if (ImGui::CollapsingHeader("Blending", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            auto& lib = MaterialLibrary::Get();
+
+            const MaterialBlendMode cur = lib.GetBlendMode(h);
+            const char* items[] = {
+                MaterialBlendModeName(MaterialBlendMode::Opaque),
+                MaterialBlendModeName(MaterialBlendMode::AlphaTest),
+                MaterialBlendModeName(MaterialBlendMode::Transparent),
+            };
+            int idx = static_cast<int>(cur);
+            ImGui::SetNextItemWidth(220.0f);
+            if (ImGui::Combo("Blend Mode", &idx, items, 3))
+            {
+                lib.SetBlendMode(h, static_cast<MaterialBlendMode>(idx));
+                lib.Flush();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Opaque: solid, rendered in G-Buffer\n"
+                    "Alpha Test: discard below cutoff (foliage, fences)\n"
+                    "Transparent: alpha blended forward pass (glass, water)");
+
+            if (cur == MaterialBlendMode::AlphaTest)
+            {
+                float cutoff = lib.GetAlphaCutoff(h);
+                ImGui::SetNextItemWidth(220.0f);
+                if (ImGui::SliderFloat("Alpha Cutoff", &cutoff, 0.0f, 1.0f))
+                {
+                    lib.SetAlphaCutoff(h, cutoff);
+                    lib.Flush();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Pixels with alpha < cutoff are discarded");
+            }
+
+            if (cur != MaterialBlendMode::Opaque)
+            {
+                float mult = lib.GetAlphaMultiplier(h);
+                ImGui::SetNextItemWidth(220.0f);
+                if (ImGui::SliderFloat("Alpha Multiplier", &mult, 0.0f, 1.0f))
+                {
+                    lib.SetAlphaMultiplier(h, mult);
+                    lib.Flush();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Multiplied with alpha from albedo texture");
+            }
+        }
+
         if (ImGui::CollapsingHeader("Sky reflections"))
         {
             bool skyEn = (m.SkyReflParams.x > 0.5f);

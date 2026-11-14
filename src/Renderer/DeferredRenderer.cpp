@@ -310,6 +310,9 @@ void DeferredRenderer::InitShaders()
     m_ShadowDepthPointShader = Shader::FromFiles(
     Paths::Resolve(dir + "shadow_depth_point.vert"),
     Paths::Resolve(dir + "shadow_depth_point.frag"));
+        m_ForwardShader = Shader::FromFiles(
+        Paths::Resolve(dir + "forward.vert"),
+        Paths::Resolve(dir + "forward.frag"));
 
     const std::string cullPath = Paths::Resolve(dir + "frustum_cull.comp");
     try
@@ -941,18 +944,20 @@ void DeferredRenderer::RenderShadowPass(
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
-void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
-                                    const glm::vec3& cameraPosition,
-                                    const glm::mat4& viewMatrix,
-                                    const glm::mat4& projectionMatrix,
-                                    const SkyboxParams& skybox,
-                                    uint32_t targetFBO,
-                                    uint32_t width,
-                                    uint32_t height,
-                                    const FXAAParams& fxaa,
-                                    const TAAParams& taa,
-                                    const PostProcessSettings& post,
-                                    float timeSeconds)
+void DeferredRenderer::LightingPass(
+    const std::vector<GPULight>& lights,
+    const glm::vec3& cameraPosition,
+    const glm::mat4& viewMatrix,
+    const glm::mat4& projectionMatrix,
+    const SkyboxParams& skybox,
+    uint32_t targetFBO,
+    uint32_t width,
+    uint32_t height,
+    const FXAAParams& fxaa,
+    const TAAParams& taa,
+    const PostProcessSettings& post,
+    float timeSeconds,
+    const FrameRenderData& frameData)
 {
     const uint32_t targetW = width  ? width  : m_GBuffer->GetWidth();
     const uint32_t targetH = height ? height : m_GBuffer->GetHeight();
@@ -997,6 +1002,7 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
     {
         m_LightingShader->SetInt("u_HasOutline", 0);
     }
+
     m_LightingShader->SetVec3("u_CameraPosition", cameraPosition);
     m_LightingShader->SetMat4("u_InvViewProj", invViewProj);
 
@@ -1019,6 +1025,7 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
     m_LightingShader->SetFloat("u_FogDensity", post.FogDensity);
     m_LightingShader->SetFloat("u_FogStart",   post.FogStart);
     m_LightingShader->SetFloat("u_FogEnd",     post.FogEnd);
+
     const auto& N = GetLightUniformNames();
     for (int i = 0; i < count; ++i)
     {
@@ -1037,7 +1044,8 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
         m_LightingShader->SetFloat(n.BiasMultiplier,  L.BiasMultiplier);
         m_LightingShader->SetInt  (n.ShadowSlot,      L.ShadowSlot);
     }
-        // ---- Shadow map ------------------------------------------------------
+
+    // ---- Directional CSM ------------------------------------------------
     {
         const bool shadowsActive = m_ShadowCaster.LightIndex >= 0 &&
                                    m_ShadowCaster.ShadowMode > 0;
@@ -1068,7 +1076,9 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
             m_LightingShader->SetFloat("u_ShadowStrength",   m_ShadowCaster.ShadowStrength);
             m_LightingShader->SetFloat("u_BiasMultiplier",   m_ShadowCaster.BiasMultiplier);
         }
-            // ---- Spot shadows ----------------------------------------------------
+    }
+
+    // ---- Spot shadows ---------------------------------------------------
     if (m_SpotShadowCount > 0)
     {
         m_SpotShadowMap.Bind(7);
@@ -1082,7 +1092,7 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
         m_LightingShader->SetInt("u_SpotShadowMap", 7);
     }
 
-    // ---- Point shadows ---------------------------------------------------
+    // ---- Point shadows --------------------------------------------------
     if (m_PointShadowCount > 0)
     {
         m_PointShadowMap.Bind(8);
@@ -1098,14 +1108,19 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
     {
         m_LightingShader->SetInt("u_PointShadowMap", 8);
     }
-    }
 
     DrawFullscreenQuad();
+
     if (skybox.CubemapPtr && skybox.CubemapPtr->GetID())
         skybox.CubemapPtr->Unbind(4);
 
     m_LightingShader->Unbind();
     m_HDRFBO->Unbind();
+
+    // ---- Transparent forward pass --------------------------------------
+    ForwardTransparentPass(frameData, cameraPosition,
+                           viewMatrix, projectionMatrix,
+                           lights, skybox);
 
     const bool useTAA  = taa.Enabled && m_TAAEnabled &&
                          m_TAAShader != nullptr && m_TonemapShader != nullptr;
@@ -1143,7 +1158,8 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
     {
         ApplyTonemap(source, m_LDRFBO->GetFramebufferID(), targetW, targetH,
                      post, bloomTexture, timeSeconds);
-        ApplyFXAA(m_LDRFBO->GetColorAttachment(0), targetFBO, targetW, targetH, fxaa);
+        ApplyFXAA(m_LDRFBO->GetColorAttachment(0), targetFBO,
+                  targetW, targetH, fxaa);
     }
     else
     {
@@ -1435,8 +1451,125 @@ void DeferredRenderer::ApplyFXAA(uint32_t sourceTexture,
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+void DeferredRenderer::ForwardTransparentPass(
+    const FrameRenderData& frame,
+    const glm::vec3& cameraPosition,
+    const glm::mat4& viewMatrix,
+    const glm::mat4& projectionMatrix,
+    const std::vector<GPULight>& lights,
+    const SkyboxParams& skybox)
+{
+    if (frame.TransparentInstances.empty())
+        return;
 
+    // ---- Sort back-to-front ------------------------------------------
+    std::vector<size_t> order(frame.TransparentInstances.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
 
+    const glm::vec3 camPos = cameraPosition;
+    std::sort(order.begin(), order.end(),
+        [&](size_t a, size_t b)
+        {
+            const glm::vec3 pa(frame.TransparentInstances[a].GPU.Model[3]);
+            const glm::vec3 pb(frame.TransparentInstances[b].GPU.Model[3]);
+            const float da = glm::dot(pa - camPos, pa - camPos);
+            const float db = glm::dot(pb - camPos, pb - camPos);
+            return da > db;   // дальние первыми
+        });
+
+    // ---- Upload instances в тот же SSBO ------------------------------
+    std::vector<InstanceGPU> sortedGPU;
+    sortedGPU.reserve(order.size());
+    for (size_t idx : order)
+        sortedGPU.push_back(frame.TransparentInstances[idx].GPU);
+
+    InstanceBuffer::Get().Upload(sortedGPU);
+
+    // ---- Render into HDR FBO (opaque уже там) ------------------------
+    m_HDRFBO->Bind();
+    glViewport(0, 0, (GLsizei)m_GBuffer->GetWidth(), (GLsizei)m_GBuffer->GetHeight());
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_FALSE);                        // не пишем depth
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_CULL_FACE);
+
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, InstanceBuffer::Get().GetSSBO());
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, MaterialLibrary::Get().GetMaterialSSBO());
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_BonesDummySSBO);
+
+    m_ForwardShader->Bind();
+    m_ForwardShader->SetMat4("u_View",       viewMatrix);
+    m_ForwardShader->SetMat4("u_Projection", projectionMatrix);
+    m_ForwardShader->SetVec3("u_CameraPosition", cameraPosition);
+
+    if (skybox.CubemapPtr && skybox.CubemapPtr->GetID())
+    {
+        skybox.CubemapPtr->Bind(4);
+        m_ForwardShader->SetInt("u_EnvironmentMap", 4);
+        m_ForwardShader->SetInt("u_HasEnvironment", 1);
+        m_ForwardShader->SetFloat("u_SkyboxRotation", skybox.RotationRadians);
+        m_ForwardShader->SetFloat("u_SkyboxBrightness", skybox.Brightness);
+    }
+    else m_ForwardShader->SetInt("u_HasEnvironment", 0);
+
+    const int lightCount = (int)std::min<size_t>(lights.size(), (size_t)kMaxLights);
+    m_ForwardShader->SetInt("u_LightCount", lightCount);
+    const auto& N = GetLightUniformNames();
+    for (int i = 0; i < lightCount; ++i)
+    {
+        const auto& L = lights[i];
+        const auto& n = N[i];
+        m_ForwardShader->SetVec3 (n.Position, L.Position);
+        m_ForwardShader->SetFloat(n.Range, L.Range);
+        m_ForwardShader->SetVec3 (n.Direction, L.Direction);
+        m_ForwardShader->SetFloat(n.Intensity, L.Intensity);
+        m_ForwardShader->SetVec3 (n.Color, L.Color);
+        m_ForwardShader->SetInt  (n.LightType, L.LightType);
+        m_ForwardShader->SetFloat(n.InnerCutoff, L.InnerCutoff);
+        m_ForwardShader->SetFloat(n.OuterCutoff, L.OuterCutoff);
+        m_ForwardShader->SetInt  (n.ShadowMode,      L.ShadowMode);
+        m_ForwardShader->SetFloat(n.ShadowStrength,  L.ShadowStrength);
+        m_ForwardShader->SetFloat(n.BiasMultiplier,  L.BiasMultiplier);
+        m_ForwardShader->SetInt  (n.ShadowSlot,      L.ShadowSlot);
+    }
+
+    MeshLibrary::Get().BindVAO();
+
+    // Индивидуальные draw (без MDI — сортировка важна)
+    for (size_t i = 0; i < sortedGPU.size(); ++i)
+    {
+        const InstanceGPU& inst = sortedGPU[i];
+        if (!MeshLibrary::Get().IsValid(inst.MeshId))
+            continue;
+        const MeshGPU& mesh = MeshLibrary::Get().Get(inst.MeshId);
+        if (mesh.IndexCount == 0)
+            continue;
+
+        m_ForwardShader->SetUInt("u_InstanceIndex", (uint32_t)i);
+
+        const void* indexOffset =
+            (const void*)(uintptr_t)(mesh.BaseIndex * sizeof(uint32_t));
+
+        glDrawElementsBaseVertex(GL_TRIANGLES,
+                                 (GLsizei)mesh.IndexCount,
+                                 GL_UNSIGNED_INT,
+                                 indexOffset,
+                                 (GLint)mesh.BaseVertex);
+    }
+
+    glBindVertexArray(0);
+    m_ForwardShader->Unbind();
+
+    if (skybox.CubemapPtr && skybox.CubemapPtr->GetID())
+        skybox.CubemapPtr->Unbind(4);
+
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+    m_HDRFBO->Unbind();
+}
 
 void DeferredRenderer::RenderOutlinePass(const FrameRenderData& frame,
                                          const std::vector<entt::entity>& selectedEntities,
@@ -1564,6 +1697,7 @@ void DeferredRenderer::ReloadShaders()
     reloadSafe(m_OutlineShader);
     reloadSafe(m_ShadowDepthShader);
     reloadSafe(m_ShadowDepthPointShader);
+    reloadSafe(m_ForwardShader);
 
     BINAX_LOG_INFO("Shaders reloaded from disk");
 }

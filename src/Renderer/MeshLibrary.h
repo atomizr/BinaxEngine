@@ -13,6 +13,8 @@ namespace Binax {
 using MeshHandle = uint32_t;
 constexpr MeshHandle kInvalidMesh = 0xFFFFFFFFu;
 
+
+
 struct MeshGPU
 {
     uint32_t  BaseVertex  = 0;

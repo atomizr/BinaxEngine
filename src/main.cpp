@@ -610,7 +610,8 @@ int main()
                                   frameFXAA,
                                   frameTAA,
                                   postSettings,
-                                  timer.GetElapsed());
+                                  timer.GetElapsed(),
+                                  frameData);
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glViewport(0, 0, window.GetWidth(), window.GetHeight());

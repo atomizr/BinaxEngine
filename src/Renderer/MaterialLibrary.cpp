@@ -36,8 +36,6 @@ MaterialLibrary& MaterialLibrary::Get()
 MaterialHandle MaterialLibrary::Add(const std::string& name, const MaterialGPU& matIn)
 {
     MaterialGPU mat = matIn;
-    // Гарантируем корректное кодирование shader type в z-канале.
-    // (int)mat.SkyReflParams.z может быть 0,1,2; сохраняем.
 
     auto it = m_ByName.find(name);
     if (it != m_ByName.end())
@@ -49,8 +47,11 @@ MaterialHandle MaterialLibrary::Add(const std::string& name, const MaterialGPU& 
     MaterialHandle h = (MaterialHandle)m_CPU.size();
     m_CPU.push_back(mat);
     MaterialEditData ed;
-    ed.Name       = name;
-    ed.ShaderType = MaterialShaderTypeFromInt((int)mat.SkyReflParams.z);
+    ed.Name            = name;
+    ed.ShaderType      = MaterialShaderTypeFromInt((int)mat.SkyReflParams.z);
+    ed.BlendMode       = MaterialBlendModeFromInt((int)(mat.StrengthB.w + 0.5f));
+    ed.AlphaCutoff     = (mat.StrengthB.z > 0.0f) ? mat.StrengthB.z : 0.5f;
+    ed.AlphaMultiplier = (mat.SkyReflParams.w > 0.0f) ? mat.SkyReflParams.w : 1.0f;
     m_Edit.push_back(std::move(ed));
     m_ByName[name] = h;
     m_Dirty = true;
@@ -68,9 +69,9 @@ MaterialHandle MaterialLibrary::GetOrCreateDefault()
     MaterialGPU def{};
     def.AlbedoRoughness = glm::vec4(0.8f, 0.8f, 0.8f, 0.5f);
     def.MetallicAOEms   = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
-    def.SkyReflParams   = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);   // z=0 → Lit
+    def.SkyReflParams   = glm::vec4(1.0f, 1.0f, 0.0f, 1.0f);
     def.StrengthA       = glm::vec4(1.0f);
-    def.StrengthB       = glm::vec4(1.0f);
+    def.StrengthB       = glm::vec4(1.0f, 1.0f, 0.5f, 0.0f);
     return Add(kName, def);
 }
 
@@ -172,6 +173,27 @@ void MaterialLibrary::Flush()
                  m_CPU.data(), GL_DYNAMIC_DRAW);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     m_Dirty = false;
+}
+
+const char* MaterialBlendModeName(MaterialBlendMode m)
+{
+    switch (m)
+    {
+        case MaterialBlendMode::Opaque:      return "Opaque";
+        case MaterialBlendMode::AlphaTest:   return "Alpha Test";
+        case MaterialBlendMode::Transparent: return "Transparent";
+    }
+    return "Opaque";
+}
+
+MaterialBlendMode MaterialBlendModeFromInt(int v)
+{
+    switch (v)
+    {
+        case 1:  return MaterialBlendMode::AlphaTest;
+        case 2:  return MaterialBlendMode::Transparent;
+        default: return MaterialBlendMode::Opaque;
+    }
 }
 
 void MaterialLibrary::Clear()

@@ -50,6 +50,10 @@ bool MaterialSerializer::Save(const MaterialLibrary& lib, MaterialHandle handle,
     j["name"]    = ed.Name;
     j["shaderType"] = static_cast<int>(ed.ShaderType);
 
+    j["blendMode"]       = static_cast<int>(ed.BlendMode);
+    j["alphaCutoff"]     = ed.AlphaCutoff;
+    j["alphaMultiplier"] = ed.AlphaMultiplier;
+
     j["albedo"]    = { gpu.AlbedoRoughness.x, gpu.AlbedoRoughness.y, gpu.AlbedoRoughness.z };
     j["roughness"] = gpu.AlbedoRoughness.w;
 
@@ -182,6 +186,9 @@ bool MaterialSerializer::Load(MaterialLibrary& lib, const std::string& filepath)
     lib.SetRoughnessMap(h, String(j, "roughnessMap"));
     lib.SetAOMap       (h, String(j, "aoMap"));
     lib.SetEmissiveMap (h, String(j, "emissiveMap"));
+    lib.SetBlendMode(h, MaterialBlendModeFromInt(Int(j, "blendMode", 0)));
+    lib.SetAlphaCutoff(h,     Number(j, "alphaCutoff",     0.5f));
+    lib.SetAlphaMultiplier(h, Number(j, "alphaMultiplier", 1.0f));
 
     return true;
 }

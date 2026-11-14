@@ -128,7 +128,8 @@ public:
                       const FXAAParams& fxaa = {},
                       const TAAParams& taa = {},
                       const PostProcessSettings& post = {},
-                      float timeSeconds = 0.0f);
+                      float timeSeconds = 0.0f,
+                      const FrameRenderData& frameData = {});
 
     const GBuffer& GetGBuffer() const { return *m_GBuffer; }
     const FrameStats& GetFrameStats() const { return m_FrameStats; }
@@ -162,6 +163,12 @@ public:
                           const glm::mat4& camProj,
                           std::vector<GPULight>& lights,
                           const ShadowSettings& settings);
+    void ForwardTransparentPass(const FrameRenderData& frame,
+                                const glm::vec3& cameraPosition,
+                                const glm::mat4& viewMatrix,
+                                const glm::mat4& projectionMatrix,
+                                const std::vector<GPULight>& lights,
+                                const SkyboxParams& skybox = {});
 
 private:
     static constexpr uint32_t kCullGroupSize = 64;
@@ -322,6 +329,7 @@ private:
                          int cascadeCount,
                          float* splits,
                          glm::mat4* outMatrices);
+    std::unique_ptr<Shader> m_ForwardShader;
 };
 
 }

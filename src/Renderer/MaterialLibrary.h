@@ -13,6 +13,16 @@ namespace Binax {
 using MaterialHandle = uint32_t;
 constexpr MaterialHandle kInvalidMaterial = 0xFFFFFFFFu;
 
+enum class MaterialBlendMode : uint32_t
+{
+    Opaque      = 0,   // как сейчас
+    AlphaTest   = 1,   // foliage: discard по alpha cutoff
+    Transparent = 2,   // стекло/вода: forward pass с blend
+};
+
+const char* MaterialBlendModeName(MaterialBlendMode m);
+MaterialBlendMode MaterialBlendModeFromInt(int v);
+
 // ---- Shader type --------------------------------------------------------
 // Как в Unity: материал ссылается на "shader", который определяет, как
 // его освещать. Расширяется добавлением новых значений в enum.
@@ -23,6 +33,8 @@ enum class MaterialShaderType : uint32_t
     Unlit     = 2,   // только albedo + emissive, без света
 };
 
+
+
 const char* MaterialShaderTypeName(MaterialShaderType t);
 MaterialShaderType MaterialShaderTypeFromInt(int v);
 
@@ -31,7 +43,7 @@ struct MaterialGPU
 {
     glm::vec4     AlbedoRoughness{ 0.8f, 0.8f, 0.8f, 0.5f };
     glm::vec4     MetallicAOEms  { 0.0f, 1.0f, 0.0f, 1.0f };
-    glm::vec4     SkyReflParams  { 1.0f, 1.0f, 0.0f, 0.0f };  // z = ShaderType
+    glm::vec4     SkyReflParams  { 1.0f, 1.0f, 0.0f, 1.0f };  // .w = AlphaMultiplier
     glm::vec4     StrengthA      { 1.0f };
 
     TextureHandle AlbedoHandle    = kInvalidTextureHandle;
@@ -41,6 +53,9 @@ struct MaterialGPU
     TextureHandle AOHandle        = kInvalidTextureHandle;
     TextureHandle EmissiveHandle  = kInvalidTextureHandle;
 
+    // .x = albedoStrength, .y = normalStrength
+    // .z = AlphaCutoff (для AlphaTest)
+    // .w = BlendMode as float (0=Opaque, 1=AlphaTest, 2=Transparent)
     glm::vec4     StrengthB      { 1.0f };
 };
 static_assert(sizeof(MaterialGPU) == 128,
@@ -57,6 +72,9 @@ struct MaterialEditData
     std::string RoughnessMapPath;
     std::string AOMapPath;
     std::string EmissiveMapPath;
+    MaterialBlendMode BlendMode       = MaterialBlendMode::Opaque;
+    float             AlphaCutoff     = 0.5f;
+    float             AlphaMultiplier = 1.0f;
 };
 
 class MaterialLibrary
@@ -109,6 +127,38 @@ public:
     void MarkDirty() { m_Dirty = true; }
 
     uint32_t GetMaterialSSBO() const { return m_SSBO; }
+        MaterialBlendMode GetBlendMode(MaterialHandle h) const
+    { return (h < m_CPU.size()) ? m_Edit[h].BlendMode : MaterialBlendMode::Opaque; }
+
+    void SetBlendMode(MaterialHandle h, MaterialBlendMode m)
+    {
+        if (h >= m_CPU.size()) return;
+        m_Edit[h].BlendMode         = m;
+        m_CPU[h].StrengthB.w        = static_cast<float>(static_cast<int>(m));
+        m_Dirty = true;
+    }
+
+    float GetAlphaCutoff(MaterialHandle h) const
+    { return (h < m_CPU.size()) ? m_Edit[h].AlphaCutoff : 0.5f; }
+
+    void SetAlphaCutoff(MaterialHandle h, float v)
+    {
+        if (h >= m_CPU.size()) return;
+        m_Edit[h].AlphaCutoff = v;
+        m_CPU[h].StrengthB.z  = v;
+        m_Dirty = true;
+    }
+
+    float GetAlphaMultiplier(MaterialHandle h) const
+    { return (h < m_CPU.size()) ? m_Edit[h].AlphaMultiplier : 1.0f; }
+
+    void SetAlphaMultiplier(MaterialHandle h, float v)
+    {
+        if (h >= m_CPU.size()) return;
+        m_Edit[h].AlphaMultiplier = v;
+        m_CPU[h].SkyReflParams.w  = v;
+        m_Dirty = true;
+    }
 
 private:
     MaterialLibrary() = default;
