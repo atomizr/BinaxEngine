@@ -175,6 +175,34 @@ BINAX_REFLECT(Binax::PostProcessComponent)
     info.Add(&PostProcessComponent::SSAOSamples,   "SSAO Samples",   PropertyKind::Int)
         .SetRange(4.0f, 32.0f);
 
+        // ---- Volumetric Fog ------------------------------------------------
+    info.Add(&PostProcessComponent::VolumetricFogEnabled, "Volumetric Fog", PropertyKind::Bool);
+    info.Add(&PostProcessComponent::VolumetricFogColor,   "Fog Ray Color",  PropertyKind::Color3);
+    info.Add(&PostProcessComponent::VolumetricFogIntensity, "Ray Brightness", PropertyKind::Float)
+        .SetRange(0.0f, 10.0f).SetSpeed(0.05f);
+    info.Add(&PostProcessComponent::VolumetricFogDensity, "Ray Density",    PropertyKind::Float)
+        .SetRange(0.0f, 0.5f).SetSpeed(0.001f);
+    info.Add(&PostProcessComponent::VolumetricFogMinHeight, "Min Height",   PropertyKind::Float)
+        .SetRange(-1000.0f, 1000.0f).SetSpeed(0.5f);
+    info.Add(&PostProcessComponent::VolumetricFogMaxHeight, "Max Height",   PropertyKind::Float)
+        .SetRange(-1000.0f, 1000.0f).SetSpeed(0.5f);
+    info.Add(&PostProcessComponent::VolumetricFogDistance,  "Max Distance", PropertyKind::Float)
+        .SetRange(1.0f, 1000.0f).SetSpeed(1.0f);
+    info.Add(&PostProcessComponent::VolumetricFogSteps,     "Ray Steps",    PropertyKind::Int)
+        .SetRange(8.0f, 128.0f);
+    info.Add(&PostProcessComponent::VolumetricFogBlurIterations, "Blur Iterations", PropertyKind::Int)
+        .SetRange(0.0f, 8.0f);
+    info.Add(&PostProcessComponent::VolumetricFogScattering, "Scattering",  PropertyKind::Float)
+        .SetRange(0.0f, 0.95f).SetSpeed(0.01f);
+        // ---- Volumetric Fog — Noise ---------------------------------------
+    info.Add(&PostProcessComponent::VolumetricFogNoiseEnabled, "Noise", PropertyKind::Bool);
+    info.Add(&PostProcessComponent::VolumetricFogNoiseSpeed, "Noise Speed", PropertyKind::Float)
+        .SetRange(0.0f, 20.0f).SetSpeed(0.05f);
+    info.Add(&PostProcessComponent::VolumetricFogNoiseScale, "Noise Scale", PropertyKind::Float)
+        .SetRange(0.001f, 2.0f).SetSpeed(0.001f);
+    info.Add(&PostProcessComponent::VolumetricFogNoiseIntensity, "Noise Intensity", PropertyKind::Float)
+        .SetRange(0.0f, 1.0f).SetSpeed(0.01f);
+
     
     info.Add(&PostProcessComponent::MotionBlurEnabled,  "Motion Blur",         PropertyKind::Bool);
     info.Add(&PostProcessComponent::MotionBlurStrength, "Motion Blur Strength", PropertyKind::Float)

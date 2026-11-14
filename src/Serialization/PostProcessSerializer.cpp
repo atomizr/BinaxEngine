@@ -80,6 +80,22 @@ bool PostProcessSerializer::Save(entt::registry& registry, const std::string& fi
     j["ssaoPower"]     = c->SSAOPower;
     j["ssaoSamples"]   = c->SSAOSamples;
 
+        // ---- Volumetric Fog -----------------------------------------------
+    j["volFogEnabled"]        = c->VolumetricFogEnabled;
+    SetVec3(j, "volFogColor", c->VolumetricFogColor);
+    j["volFogIntensity"]      = c->VolumetricFogIntensity;
+    j["volFogDensity"]        = c->VolumetricFogDensity;
+    j["volFogMinHeight"]      = c->VolumetricFogMinHeight;
+    j["volFogMaxHeight"]      = c->VolumetricFogMaxHeight;
+    j["volFogDistance"]       = c->VolumetricFogDistance;
+    j["volFogSteps"]          = c->VolumetricFogSteps;
+    j["volFogBlurIterations"] = c->VolumetricFogBlurIterations;
+    j["volFogScattering"]     = c->VolumetricFogScattering;
+    j["volFogNoiseEnabled"]   = c->VolumetricFogNoiseEnabled;
+    j["volFogNoiseSpeed"]     = c->VolumetricFogNoiseSpeed;
+    j["volFogNoiseScale"]     = c->VolumetricFogNoiseScale;
+    j["volFogNoiseIntensity"] = c->VolumetricFogNoiseIntensity;
+
     
     j["motionBlurEnabled"]  = c->MotionBlurEnabled;
     j["motionBlurStrength"] = c->MotionBlurStrength;
@@ -180,6 +196,21 @@ bool PostProcessSerializer::Load(entt::registry& registry, const std::string& fi
     c->SSAOBias      = Number(j, "ssaoBias",      0.025f);
     c->SSAOPower     = Number(j, "ssaoPower",     1.5f);
     c->SSAOSamples   = Int   (j, "ssaoSamples",   16);
+
+    c->VolumetricFogEnabled        = Bool  (j, "volFogEnabled",        false);
+    c->VolumetricFogColor          = Vec3  (j, "volFogColor",          glm::vec3(1.0f, 0.95f, 0.85f));
+    c->VolumetricFogIntensity      = Number(j, "volFogIntensity",      1.0f);
+    c->VolumetricFogDensity        = Number(j, "volFogDensity",        0.02f);
+    c->VolumetricFogMinHeight      = Number(j, "volFogMinHeight",     -100.0f);
+    c->VolumetricFogMaxHeight      = Number(j, "volFogMaxHeight",      100.0f);
+    c->VolumetricFogDistance       = Number(j, "volFogDistance",       100.0f);
+    c->VolumetricFogSteps          = Int   (j, "volFogSteps",          64);
+    c->VolumetricFogBlurIterations = Int   (j, "volFogBlurIterations", 2);
+    c->VolumetricFogScattering     = Number(j, "volFogScattering",     0.5f);
+    c->VolumetricFogNoiseEnabled   = Bool  (j, "volFogNoiseEnabled",   false);
+    c->VolumetricFogNoiseSpeed     = Number(j, "volFogNoiseSpeed",     0.5f);
+    c->VolumetricFogNoiseScale     = Number(j, "volFogNoiseScale",     0.1f);
+    c->VolumetricFogNoiseIntensity = Number(j, "volFogNoiseIntensity", 0.8f);
 
     c->MotionBlurEnabled  = Bool(j, "motionBlurEnabled", true);
     c->MotionBlurStrength = Number(j, "motionBlurStrength", 0.5f);

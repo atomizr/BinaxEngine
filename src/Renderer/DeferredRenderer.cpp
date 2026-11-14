@@ -317,6 +317,9 @@ void DeferredRenderer::InitShaders()
         Paths::Resolve(dir + "forward.frag"));
             m_SSAOShader     = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "ssao.frag"));
     m_SSAOBlurShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "ssao_blur.frag"));
+    m_VolumetricFogShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "volumetric_fog.frag"));
+    m_VolumetricFogBlurShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "volumetric_fog_blur.frag"));
+    m_VolumetricFogCompositeShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "volumetric_fog_composite.frag"));
 
     const std::string cullPath = Paths::Resolve(dir + "frustum_cull.comp");
     try
@@ -1145,6 +1148,12 @@ void DeferredRenderer::LightingPass(
                            viewMatrix, projectionMatrix,
                            lights, skybox);
 
+        // ---- Volumetric Fog / God Rays -------------------------------------
+    // ---- Volumetric Fog / God Rays -------------------------------------
+    if (post.Enabled && post.VolumetricFogEnabled)
+        VolumetricFogPass(viewMatrix, projectionMatrix, cameraPosition,
+                          lights, post, timeSeconds);
+
     const bool useTAA  = taa.Enabled && m_TAAEnabled &&
                          m_TAAShader != nullptr && m_TonemapShader != nullptr;
     const bool useFXAA = !useTAA && fxaa.Enabled && m_FXAAShader != nullptr;
@@ -1442,6 +1451,209 @@ void DeferredRenderer::ApplyTonemap(uint32_t sourceTexture, uint32_t targetFBO,
     glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void DeferredRenderer::EnsureVolumetricFogTargets(uint32_t width, uint32_t height)
+{
+    if (width == 0 || height == 0) return;
+    const uint32_t halfW = std::max(1u, width / 2u);
+    const uint32_t halfH = std::max(1u, height / 2u);
+
+    for (int i = 0; i < 2; ++i)
+    {
+        if (!m_VolumetricFogFBO[i])
+        {
+            m_VolumetricFogFBO[i] = std::make_unique<Framebuffer>(halfW, halfH);
+            m_VolumetricFogFBO[i]->Bind();
+            m_VolumetricFogFBO[i]->AttachColorTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, 0);
+            m_VolumetricFogFBO[i]->CheckStatus();
+            m_VolumetricFogFBO[i]->Unbind();
+
+            glBindTexture(GL_TEXTURE_2D, m_VolumetricFogFBO[i]->GetColorAttachment(0));
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
+        else m_VolumetricFogFBO[i]->Resize(halfW, halfH);
+    }
+}
+
+void DeferredRenderer::VolumetricFogPass(
+    const glm::mat4& viewMatrix,
+    const glm::mat4& projectionMatrix,
+    const glm::vec3& cameraPosition,
+    const std::vector<GPULight>& lights,
+    const PostProcessSettings& post,
+    float timeSeconds)
+{
+    if (!post.VolumetricFogEnabled) return;
+    if (!m_VolumetricFogShader || !m_VolumetricFogBlurShader ||
+        !m_VolumetricFogCompositeShader) return;
+
+    // ---- Find sun (first directional with shadows, fallback to first directional)
+    int sunIdx = -1;
+    for (size_t i = 0; i < lights.size(); ++i)
+    {
+        if (lights[i].LightType == GPULight::Directional &&
+            lights[i].ShadowMode != 0)
+        {
+            sunIdx = (int)i;
+            break;
+        }
+    }
+    if (sunIdx < 0)
+    {
+        for (size_t i = 0; i < lights.size(); ++i)
+        {
+            if (lights[i].LightType == GPULight::Directional)
+            {
+                sunIdx = (int)i;
+                break;
+            }
+        }
+    }
+    if (sunIdx < 0) return;
+
+    const GPULight& sun = lights[sunIdx];
+
+    const uint32_t fullW = m_GBuffer->GetWidth();
+    const uint32_t fullH = m_GBuffer->GetHeight();
+    if (fullW == 0 || fullH == 0) return;
+
+    EnsureVolumetricFogTargets(fullW, fullH);
+
+    const uint32_t halfW = std::max(1u, fullW / 2u);
+    const uint32_t halfH = std::max(1u, fullH / 2u);
+
+    // Use non-jittered projection — fog не должен джиттерить
+    const glm::mat4 invViewProj = glm::inverse(projectionMatrix * viewMatrix);
+
+    // ---- Pass 1: raymarch ---------------------------------------------
+    m_VolumetricFogFBO[0]->Bind();
+    glViewport(0, 0, (GLsizei)halfW, (GLsizei)halfH);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_BLEND);
+
+    GLfloat prevClear[4]; glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClear);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Bind G-Buffer depth
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_GBuffer->GetDepthAttachment());
+
+    // Bind CSM
+    if (m_ShadowCaster.LightIndex >= 0 && m_ShadowCaster.ShadowMode > 0)
+        m_ShadowMap.Bind(1);
+
+    m_VolumetricFogShader->Bind();
+    m_VolumetricFogShader->SetInt  ("u_DepthTexture", 0);
+    m_VolumetricFogShader->SetInt  ("u_ShadowMap",    1);
+    m_VolumetricFogShader->SetMat4 ("u_InvViewProj",  invViewProj);
+    m_VolumetricFogShader->SetMat4 ("u_ViewMatrix",   viewMatrix);
+    m_VolumetricFogShader->SetVec3 ("u_CameraPosition", cameraPosition);
+
+    // CSM
+    const bool shadowsActive = m_ShadowCaster.LightIndex >= 0 &&
+                               m_ShadowCaster.ShadowMode > 0;
+    m_VolumetricFogShader->SetInt  ("u_ShadowMode",
+        shadowsActive ? m_ShadowCaster.ShadowMode : 0);
+    m_VolumetricFogShader->SetInt  ("u_CascadeCount",
+        shadowsActive ? m_ShadowCaster.CascadeCount : 0);
+    if (shadowsActive)
+    {
+        m_VolumetricFogShader->SetMat4Array("u_LightSpaceMatrices",
+            m_ShadowCaster.LightSpaceMatrices, m_ShadowCaster.CascadeCount);
+        m_VolumetricFogShader->SetFloatArray("u_CascadeSplits",
+            m_ShadowCaster.CascadeSplits, m_ShadowCaster.CascadeCount);
+        m_VolumetricFogShader->SetFloat("u_MaxShadowDistance",
+            m_ShadowCaster.MaxShadowDistance);
+    }
+
+    // Sun
+    m_VolumetricFogShader->SetVec3 ("u_SunDirection",  glm::normalize(sun.Direction));
+    m_VolumetricFogShader->SetVec3 ("u_SunColor",      sun.Color);
+    m_VolumetricFogShader->SetFloat("u_SunIntensity",  sun.Intensity);
+
+    // Fog params
+    m_VolumetricFogShader->SetVec3 ("u_FogColor",     post.VolumetricFogColor);
+    m_VolumetricFogShader->SetFloat("u_FogIntensity", post.VolumetricFogIntensity);
+    m_VolumetricFogShader->SetFloat("u_FogDensity",   post.VolumetricFogDensity);
+    m_VolumetricFogShader->SetFloat("u_FogMinHeight", post.VolumetricFogMinHeight);
+    m_VolumetricFogShader->SetFloat("u_FogMaxHeight", post.VolumetricFogMaxHeight);
+    m_VolumetricFogShader->SetFloat("u_FogDistance",  post.VolumetricFogDistance);
+    m_VolumetricFogShader->SetInt  ("u_FogSteps",     std::clamp(post.VolumetricFogSteps, 8, 128));
+    m_VolumetricFogShader->SetFloat("u_Scattering",   glm::clamp(post.VolumetricFogScattering, 0.0f, 0.95f));
+    m_VolumetricFogShader->SetInt  ("u_NoiseEnabled",   post.VolumetricFogNoiseEnabled ? 1 : 0);
+    m_VolumetricFogShader->SetFloat("u_NoiseSpeed",     post.VolumetricFogNoiseSpeed);
+    m_VolumetricFogShader->SetFloat("u_NoiseScale",     glm::max(post.VolumetricFogNoiseScale, 0.001f));
+    m_VolumetricFogShader->SetFloat("u_NoiseIntensity", glm::clamp(post.VolumetricFogNoiseIntensity, 0.0f, 1.0f));
+    m_VolumetricFogShader->SetFloat("u_Time",           timeSeconds);
+
+    DrawFullscreenQuad();
+    m_VolumetricFogShader->Unbind();
+
+    // ---- Pass 2: separable blur, N iterations -------------------------
+    const glm::vec2 halfTexel(1.0f / (float)halfW, 1.0f / (float)halfH);
+    const int iterations = std::clamp(post.VolumetricFogBlurIterations, 0, 8);
+
+    m_VolumetricFogBlurShader->Bind();
+    m_VolumetricFogBlurShader->SetVec2("u_TexelSize", halfTexel);
+
+    for (int iter = 0; iter < iterations; ++iter)
+    {
+        // H: FBO[0] → FBO[1]
+        m_VolumetricFogFBO[1]->Bind();
+        glViewport(0, 0, (GLsizei)halfW, (GLsizei)halfH);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_VolumetricFogFBO[0]->GetColorAttachment(0));
+        m_VolumetricFogBlurShader->SetInt ("u_Texture",  0);
+        m_VolumetricFogBlurShader->SetVec2("u_Direction", glm::vec2(1.0f, 0.0f));
+        DrawFullscreenQuad();
+
+        // V: FBO[1] → FBO[0]
+        m_VolumetricFogFBO[0]->Bind();
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_VolumetricFogFBO[1]->GetColorAttachment(0));
+        m_VolumetricFogBlurShader->SetInt ("u_Texture",  0);
+        m_VolumetricFogBlurShader->SetVec2("u_Direction", glm::vec2(0.0f, 1.0f));
+        DrawFullscreenQuad();
+    }
+
+    m_VolumetricFogBlurShader->Unbind();
+
+    // ---- Pass 3: composite (additive) into HDR ------------------------
+    m_HDRFBO->Bind();
+    glViewport(0, 0, (GLsizei)fullW, (GLsizei)fullH);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);   // не трогаем alpha
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_VolumetricFogFBO[0]->GetColorAttachment(0));
+
+    m_VolumetricFogCompositeShader->Bind();
+    m_VolumetricFogCompositeShader->SetInt("u_FogTexture", 0);
+    DrawFullscreenQuad();
+    m_VolumetricFogCompositeShader->Unbind();
+
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_BLEND);
+    m_HDRFBO->Unbind();
+
+    glClearColor(prevClear[0], prevClear[1], prevClear[2], prevClear[3]);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
 }
 
 void DeferredRenderer::ApplyFXAA(uint32_t sourceTexture,
@@ -1900,6 +2112,9 @@ void DeferredRenderer::ReloadShaders()
     reloadSafe(m_ShadowDepthPointShader);
     reloadSafe(m_SSAOShader);
     reloadSafe(m_SSAOBlurShader);
+    reloadSafe(m_VolumetricFogShader);
+    reloadSafe(m_VolumetricFogBlurShader);
+    reloadSafe(m_VolumetricFogCompositeShader);
     reloadSafe(m_ForwardShader);
 
     BINAX_LOG_INFO("Shaders reloaded from disk");

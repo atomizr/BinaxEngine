@@ -148,6 +148,21 @@ Binax::PostProcessSettings GatherPostProcessSettings(entt::registry& registry)
         s.SSAOPower     = c.SSAOPower;
         s.SSAOSamples   = c.SSAOSamples;
 
+        s.VolumetricFogEnabled        = c.VolumetricFogEnabled;
+        s.VolumetricFogColor          = c.VolumetricFogColor;
+        s.VolumetricFogIntensity      = c.VolumetricFogIntensity;
+        s.VolumetricFogDensity        = c.VolumetricFogDensity;
+        s.VolumetricFogMinHeight      = c.VolumetricFogMinHeight;
+        s.VolumetricFogMaxHeight      = c.VolumetricFogMaxHeight;
+        s.VolumetricFogDistance       = c.VolumetricFogDistance;
+        s.VolumetricFogSteps          = c.VolumetricFogSteps;
+        s.VolumetricFogBlurIterations = c.VolumetricFogBlurIterations;
+        s.VolumetricFogScattering     = c.VolumetricFogScattering;
+        s.VolumetricFogNoiseEnabled   = c.VolumetricFogNoiseEnabled;
+        s.VolumetricFogNoiseSpeed     = c.VolumetricFogNoiseSpeed;
+        s.VolumetricFogNoiseScale     = c.VolumetricFogNoiseScale;
+        s.VolumetricFogNoiseIntensity = c.VolumetricFogNoiseIntensity;
+
         s.MotionBlurEnabled  = c.MotionBlurEnabled;
         s.MotionBlurStrength = c.MotionBlurStrength;
         s.MotionBlurSamples  = c.MotionBlurSamples;

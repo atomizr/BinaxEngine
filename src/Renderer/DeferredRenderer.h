@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <array>
 #include <glm/glm.hpp>
 
 #include <glad/glad.h>
@@ -71,6 +72,23 @@ struct PostProcessSettings
     float SSAOBias      = 0.025f;
     float SSAOPower     = 1.5f;
     int   SSAOSamples   = 16;
+
+        // Volumetric Fog (God Rays)
+    bool      VolumetricFogEnabled        = false;
+    glm::vec3 VolumetricFogColor          {1.0f, 0.95f, 0.85f};
+    float     VolumetricFogIntensity      = 1.0f;
+    float     VolumetricFogDensity        = 0.02f;
+    float     VolumetricFogMinHeight      = -100.0f;
+    float     VolumetricFogMaxHeight      =  100.0f;
+    float     VolumetricFogDistance       =  100.0f;
+    int       VolumetricFogSteps          =  64;
+    int       VolumetricFogBlurIterations =  2;
+    float     VolumetricFogScattering     =  0.5f;
+        // Volumetric Fog Noise
+    bool      VolumetricFogNoiseEnabled   = false;
+    float     VolumetricFogNoiseSpeed     = 0.5f;
+    float     VolumetricFogNoiseScale     = 0.1f;
+    float     VolumetricFogNoiseIntensity = 0.8f;
 
     bool  MotionBlurEnabled  = false;
     float MotionBlurStrength = 0.5f;
@@ -344,11 +362,26 @@ private:
     std::unique_ptr<Framebuffer> m_SSAOBlurFBO;
     bool                         m_HasSSAO = false;
     std::array<glm::vec3, 32>    m_SSAOKernel{};
-        void GenerateSSAOKernel();
+    void GenerateSSAOKernel();
     void EnsureSSAOTargets(uint32_t width, uint32_t height);
     void SSAOPass(const glm::mat4& viewMatrix,
                   const glm::mat4& projectionMatrix,
                   const PostProcessSettings& post);
+
+    // ---- Volumetric Fog (God Rays) --------------------------------------
+    std::unique_ptr<Shader>      m_VolumetricFogShader;
+    std::unique_ptr<Shader>      m_VolumetricFogBlurShader;
+    std::unique_ptr<Shader>      m_VolumetricFogCompositeShader;
+    std::unique_ptr<Framebuffer> m_VolumetricFogFBO[2];
+
+    void EnsureVolumetricFogTargets(uint32_t width, uint32_t height);
+    void VolumetricFogPass(const glm::mat4& viewMatrix,
+                           const glm::mat4& projectionMatrix,
+                           const glm::vec3& cameraPosition,
+                           const std::vector<GPULight>& lights,
+                           const PostProcessSettings& post,
+                           float timeSeconds);
+
 };
 
 }

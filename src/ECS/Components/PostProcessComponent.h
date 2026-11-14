@@ -56,6 +56,24 @@ struct PostProcessComponent
     float SSAOPower     = 1.5f;
     int   SSAOSamples   = 16;
 
+        // ---- Volumetric Fog (God Rays) ------------------------------------
+    bool      VolumetricFogEnabled          = false;
+    glm::vec3 VolumetricFogColor            = glm::vec3(1.0f, 0.95f, 0.85f);
+    float     VolumetricFogIntensity        = 1.0f;
+    float     VolumetricFogDensity          = 0.02f;
+    float     VolumetricFogMinHeight        = -100.0f;
+    float     VolumetricFogMaxHeight        =  100.0f;
+    float     VolumetricFogDistance         =  100.0f;
+    int       VolumetricFogSteps            =  64;
+    int       VolumetricFogBlurIterations   =  2;
+    float     VolumetricFogScattering       =  0.5f;
+
+        // Noise (движение "дыма")
+    bool      VolumetricFogNoiseEnabled   = false;
+    float     VolumetricFogNoiseSpeed     = 0.5f;
+    float     VolumetricFogNoiseScale     = 0.1f;
+    float     VolumetricFogNoiseIntensity = 0.8f;
+
     
     bool  MotionBlurEnabled  = true;
     float MotionBlurStrength = 0.5f;
