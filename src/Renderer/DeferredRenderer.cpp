@@ -43,6 +43,7 @@ glm::vec2 HaltonJitter(uint32_t frame, uint32_t width, uint32_t height)
 struct LightUniformNames
 {
     std::string Position, Range, Direction, Intensity, Color, LightType, InnerCutoff, OuterCutoff;
+    std::string ShadowMode, ShadowStrength, BiasMultiplier, ShadowSlot;
 };
 
 const std::array<LightUniformNames, Binax::kMaxLights>& GetLightUniformNames()
@@ -57,6 +58,10 @@ const std::array<LightUniformNames, Binax::kMaxLights>& GetLightUniformNames()
             n.Direction = base + "Direction";     n.Intensity = base + "Intensity";
             n.Color = base + "Color";             n.LightType = base + "LightType";
             n.InnerCutoff = base + "InnerCutoff"; n.OuterCutoff = base + "OuterCutoff";
+            n.ShadowMode     = base + "ShadowMode";
+            n.ShadowStrength = base + "ShadowStrength";
+            n.BiasMultiplier = base + "BiasMultiplier";
+            n.ShadowSlot     = base + "ShadowSlot";
         }
         return arr;
     }();
@@ -296,12 +301,15 @@ void DeferredRenderer::InitShaders()
     m_MotionBlurShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "motion_blur.frag"));
     m_BloomDownShader  = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "bloom_down.frag"));
     m_BloomUpShader    = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "bloom_up.frag"));
-        m_OutlineShader = Shader::FromFiles(
-        Paths::Resolve(dir + "outline.vert"),
-        Paths::Resolve(dir + "outline.frag"));
-        m_ShadowDepthShader = Shader::FromFiles(
-        Paths::Resolve(dir + "shadow_depth.vert"),
-        Paths::Resolve(dir + "shadow_depth.frag"));
+     m_OutlineShader = Shader::FromFiles(
+    Paths::Resolve(dir + "outline.vert"),
+    Paths::Resolve(dir + "outline.frag"));
+    m_ShadowDepthShader = Shader::FromFiles(
+    Paths::Resolve(dir + "shadow_depth.vert"),
+    Paths::Resolve(dir + "shadow_depth.frag"));
+    m_ShadowDepthPointShader = Shader::FromFiles(
+    Paths::Resolve(dir + "shadow_depth_point.vert"),
+    Paths::Resolve(dir + "shadow_depth_point.frag"));
 
     const std::string cullPath = Paths::Resolve(dir + "frustum_cull.comp");
     try
@@ -569,6 +577,110 @@ void DeferredRenderer::EnsureShadowMap(uint32_t size, uint32_t layers)
                    size, size, layers);
 }
 
+void DeferredRenderer::EnsureSpotShadowMap(uint32_t size)
+{
+    if (m_SpotShadowMap.GetSize() == size &&
+        m_SpotShadowMap.GetLayers() == (uint32_t)kMaxSpotShadows)
+        return;
+    m_SpotShadowMap.Create(size, (uint32_t)kMaxSpotShadows);
+    BINAX_LOG_INFO("SpotShadowMap: recreated {}×{}×{} layers",
+                   size, size, kMaxSpotShadows);
+}
+
+void DeferredRenderer::EnsurePointShadowMap(uint32_t size)
+{
+    if (m_PointShadowMap.GetSize() == size &&
+        m_PointShadowMap.GetCubes() == (uint32_t)kMaxPointShadows)
+        return;
+    m_PointShadowMap.Create(size, (uint32_t)kMaxPointShadows);
+    BINAX_LOG_INFO("PointShadowMap: recreated {}×{}×{} cubes",
+                   size, size, kMaxPointShadows);
+}
+
+void DeferredRenderer::RenderSpotShadow(const GPULight& light, int slot,
+                                        FrameRenderData& frame,
+                                        const ShadowSettings& settings)
+{
+    if (slot < 0 || slot >= kMaxSpotShadows) return;
+
+    const float range   = glm::max(light.Range, 0.1f);
+    const float nearP   = 0.1f;
+    const float outerCos = glm::clamp(light.OuterCutoff, -0.9999f, 0.9999f);
+    const float outerAng = std::acos(outerCos);
+    const float fovDeg   = glm::degrees(outerAng * 2.0f);
+
+    glm::vec3 pos = light.Position;
+    glm::vec3 dir = glm::normalize(light.Direction);
+    glm::vec3 up  = (std::abs(dir.y) < 0.99f) ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
+
+    glm::mat4 view = glm::lookAt(pos, pos + dir, up);
+    glm::mat4 proj = glm::perspective(glm::radians(fovDeg), 1.0f, nearP, range);
+    glm::mat4 lightSpace = proj * view;
+
+    m_SpotLightSpaceMatrix[slot] = lightSpace;
+
+    m_SpotShadowMap.BindLayer((uint32_t)slot);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    m_ShadowDepthShader->Bind();
+    m_ShadowDepthShader->SetMat4("u_LightViewProj", lightSpace);
+
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_ShadowIndirectSSBO);
+    glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT,
+                                (void*)0, (GLsizei)frame.Draws.size(), 0);
+    m_ShadowDepthShader->Unbind();
+}
+
+void DeferredRenderer::RenderPointShadow(const GPULight& light, int slot,
+                                         FrameRenderData& frame,
+                                         const ShadowSettings& settings)
+{
+    if (slot < 0 || slot >= kMaxPointShadows) return;
+
+    const float range = glm::max(light.Range, 0.1f);
+    const float nearP = 0.1f;
+
+    m_PointShadowNear[slot] = nearP;
+    m_PointShadowFar [slot] = range;
+
+    const glm::vec3 pos = light.Position;
+    const glm::mat4 proj = glm::perspective(glm::radians(90.0f),
+                                            1.0f, nearP, range);
+
+    static const glm::vec3 kDirs[6] = {
+        { 1, 0, 0}, {-1, 0, 0},
+        { 0, 1, 0}, { 0,-1, 0},
+        { 0, 0, 1}, { 0, 0,-1}
+    };
+    static const glm::vec3 kUps[6] = {
+        {0,-1, 0}, {0,-1, 0},
+        {0, 0, 1}, {0, 0,-1},
+        {0,-1, 0}, {0,-1, 0}
+    };
+
+    m_ShadowDepthPointShader->Bind();
+    m_ShadowDepthPointShader->SetVec3("u_LightPos", pos);
+    m_ShadowDepthPointShader->SetFloat("u_Far", range);
+
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_ShadowIndirectSSBO);
+
+    for (int f = 0; f < 6; ++f)
+    {
+        glm::mat4 view = glm::lookAt(pos, pos + kDirs[f], kUps[f]);
+        glm::mat4 lightSpace = proj * view;
+
+        m_PointShadowMap.BindCubeFace((uint32_t)slot, (uint32_t)f);
+        glClear(GL_DEPTH_BUFFER_BIT);
+
+        m_ShadowDepthPointShader->SetMat4("u_LightViewProj", lightSpace);
+
+        glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT,
+                                    (void*)0, (GLsizei)frame.Draws.size(), 0);
+    }
+
+    m_ShadowDepthPointShader->Unbind();
+}
+
 void DeferredRenderer::EnsureShadowDrawBuffers(uint32_t drawCount)
 {
     if (m_ShadowIndirectCapacity >= drawCount && m_ShadowIndirectSSBO != 0)
@@ -679,62 +791,52 @@ void DeferredRenderer::RenderShadowPass(
     FrameRenderData& frame,
     const glm::mat4& camView,
     const glm::mat4& camProj,
-    const std::vector<GPULight>& lights,
+    std::vector<GPULight>& lights,
     const ShadowSettings& settings)
 {
-    m_ShadowCaster = {};
+    m_ShadowCaster   = {};
+    m_SpotShadowCount  = 0;
+    m_PointShadowCount = 0;
+
+    for (auto& L : lights) L.ShadowSlot = -1;
 
     if (!settings.Enabled || frame.Draws.empty())
         return;
 
-    // Ищем directional light с включёнными тенями (первый попавшийся)
-    int lightIdx = -1;
+    // ---- Разбор кастеров ---------------------------------------------------
+    int directionalIdx = -1;
+    std::vector<int> spotIdxs, pointIdxs;
+
     for (size_t i = 0; i < lights.size(); ++i)
     {
-        if (lights[i].LightType == GPULight::Directional && lights[i].ShadowMode != 0)
-        {
-            lightIdx = (int)i;
-            break;
-        }
+        if (lights[i].ShadowMode == 0) continue;
+        if (lights[i].LightType == GPULight::Directional && directionalIdx < 0)
+            directionalIdx = (int)i;
+        else if (lights[i].LightType == GPULight::Spot &&
+                 (int)spotIdxs.size() < kMaxSpotShadows)
+            spotIdxs.push_back((int)i);
+        else if (lights[i].LightType == GPULight::Point &&
+                 (int)pointIdxs.size() < kMaxPointShadows)
+            pointIdxs.push_back((int)i);
     }
-    if (lightIdx < 0)
+
+    if (directionalIdx < 0 && spotIdxs.empty() && pointIdxs.empty())
         return;
 
-    const GPULight& light = lights[lightIdx];
-    const int cascadeCount = std::clamp(settings.CascadeCount, 1, 4);
-
-    // Near/far/fov/aspect из proj-матрицы (универсально для перспективы)
-    const float nearPlane = camProj[3][2] / (camProj[2][2] - 1.0f);
-    const float farPlane  = camProj[3][2] / (camProj[2][2] + 1.0f);
-    const float fovY      = 2.0f * std::atan(1.0f / camProj[1][1]);
-    const float aspect    = camProj[1][1] / camProj[0][0];
-    const float effectiveFar = std::min(farPlane, settings.MaxShadowDistance);
-    if (effectiveFar <= nearPlane || fovY <= 0.0f)
-        return;
-
-    EnsureShadowMap((uint32_t)settings.GlobalResolution, (uint32_t)cascadeCount);
-
-    float splits[4] = {};
-    glm::mat4 lightSpace[4]{};
-    ComputeCascades(camView, nearPlane, effectiveFar, fovY, aspect,
-                    light.Direction, settings, cascadeCount, splits, lightSpace);
-
-    // Upload instances (GeometryPass ниже тоже загрузит, но нам нужно раньше)
+    // ---- Upload instances + MDI -------------------------------------------
     InstanceBuffer::Get().Upload(frame.Instances);
 
-    // Upload indirect draws (без куллинга — рендерим всех shadow casters)
     EnsureShadowDrawBuffers((uint32_t)frame.Draws.size());
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_ShadowIndirectSSBO);
     glBufferSubData(GL_DRAW_INDIRECT_BUFFER, 0,
                     (GLsizeiptr)(frame.Draws.size() * sizeof(DrawElementsIndirect)),
                     frame.Draws.data());
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, InstanceBuffer::Get().GetSSBO());
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_BonesDummySSBO);
 
-    m_ShadowDepthShader->Bind();
-    MeshLibrary::Get().BindVAO();
-
+    // ---- Common state -----------------------------------------------------
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
@@ -743,44 +845,100 @@ void DeferredRenderer::RenderShadowPass(
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(1.5f, 2.0f);
 
-    for (int c = 0; c < cascadeCount; ++c)
+    MeshLibrary::Get().BindVAO();
+
+    // ---- Directional CSM --------------------------------------------------
+    if (directionalIdx >= 0)
     {
-        m_ShadowMap.BindLayer((uint32_t)c);
-        glClear(GL_DEPTH_BUFFER_BIT);
+        const GPULight& light = lights[directionalIdx];
+        const int cascadeCount = std::clamp(settings.CascadeCount, 1, 4);
 
-        m_ShadowDepthShader->SetMat4("u_LightViewProj", lightSpace[c]);
+        const float nearPlane = camProj[3][2] / (camProj[2][2] - 1.0f);
+        const float farPlane  = camProj[3][2] / (camProj[2][2] + 1.0f);
+        const float fovY      = 2.0f * std::atan(1.0f / camProj[1][1]);
+        const float aspect    = camProj[1][1] / camProj[0][0];
+        const float effFar    = std::min(farPlane, settings.MaxShadowDistance);
 
-        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_ShadowIndirectSSBO);
-        glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT,
-                                    (void*)0,
-                                    (GLsizei)frame.Draws.size(),
-                                    0);
+        if (effFar > nearPlane && fovY > 0.0f)
+        {
+            EnsureShadowMap((uint32_t)settings.GlobalResolution,
+                            (uint32_t)cascadeCount);
+
+            float splits[4] = {};
+            glm::mat4 lightSpace[4]{};
+            ComputeCascades(camView, nearPlane, effFar, fovY, aspect,
+                            light.Direction, settings, cascadeCount,
+                            splits, lightSpace);
+
+            m_ShadowDepthShader->Bind();
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_ShadowIndirectSSBO);
+
+            for (int c = 0; c < cascadeCount; ++c)
+            {
+                m_ShadowMap.BindLayer((uint32_t)c);
+                glClear(GL_DEPTH_BUFFER_BIT);
+                m_ShadowDepthShader->SetMat4("u_LightViewProj", lightSpace[c]);
+                glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT,
+                                            (void*)0,
+                                            (GLsizei)frame.Draws.size(), 0);
+            }
+            m_ShadowDepthShader->Unbind();
+
+            m_ShadowCaster.LightIndex        = directionalIdx;
+            m_ShadowCaster.ShadowMode        = light.ShadowMode;
+            m_ShadowCaster.CascadeCount      = cascadeCount;
+            m_ShadowCaster.ShadowStrength    = light.ShadowStrength;
+            m_ShadowCaster.BiasMultiplier    = light.BiasMultiplier;
+            m_ShadowCaster.MaxShadowDistance = settings.MaxShadowDistance;
+            m_ShadowCaster.FadeOutDistance   = settings.FadeOutDistance;
+            m_ShadowCaster.DepthBias         = settings.DepthBias;
+            m_ShadowCaster.NormalBias        = settings.NormalBias;
+            m_ShadowCaster.ShadowSoftness    = settings.ShadowSoftness;
+            for (int i = 0; i < 4; ++i)
+            {
+                m_ShadowCaster.LightSpaceMatrices[i] = lightSpace[i];
+                m_ShadowCaster.CascadeSplits[i] =
+                    (i < cascadeCount) ? splits[i] : 0.0f;
+            }
+        }
     }
 
-    glBindVertexArray(0);
-    m_ShadowDepthShader->Unbind();
+    // ---- Spot shadows -----------------------------------------------------
+    if (!spotIdxs.empty())
+    {
+        EnsureSpotShadowMap((uint32_t)settings.GlobalResolution);
 
+        for (size_t i = 0; i < spotIdxs.size(); ++i)
+        {
+            const int li = spotIdxs[i];
+            lights[li].ShadowSlot = (int)i;
+            RenderSpotShadow(lights[li], (int)i, frame, settings);
+        }
+        m_SpotShadowCount = (uint32_t)spotIdxs.size();
+    }
+
+    // ---- Point shadows ----------------------------------------------------
+    if (!pointIdxs.empty())
+    {
+        const uint32_t pointRes = std::max<uint32_t>(256u,
+            (uint32_t)settings.GlobalResolution / 2u);
+        EnsurePointShadowMap(pointRes);
+
+        for (size_t i = 0; i < pointIdxs.size(); ++i)
+        {
+            const int li = pointIdxs[i];
+            lights[li].ShadowSlot = (int)i;
+            RenderPointShadow(lights[li], (int)i, frame, settings);
+        }
+        m_PointShadowCount = (uint32_t)pointIdxs.size();
+    }
+
+    // ---- Restore ----------------------------------------------------------
     glDisable(GL_POLYGON_OFFSET_FILL);
+    glBindVertexArray(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-    // Запоминаем для lighting pass
-    m_ShadowCaster.LightIndex        = lightIdx;
-    m_ShadowCaster.ShadowMode        = light.ShadowMode;
-    m_ShadowCaster.CascadeCount      = cascadeCount;
-    m_ShadowCaster.ShadowStrength    = light.ShadowStrength;
-    m_ShadowCaster.BiasMultiplier    = light.BiasMultiplier;
-    m_ShadowCaster.MaxShadowDistance = settings.MaxShadowDistance;
-    m_ShadowCaster.FadeOutDistance   = settings.FadeOutDistance;
-    m_ShadowCaster.DepthBias         = settings.DepthBias;
-    m_ShadowCaster.NormalBias        = settings.NormalBias;
-    m_ShadowCaster.ShadowSoftness    = settings.ShadowSoftness;
-    for (int i = 0; i < 4; ++i)
-    {
-        m_ShadowCaster.LightSpaceMatrices[i] = lightSpace[i];
-        m_ShadowCaster.CascadeSplits[i]      = (i < cascadeCount) ? splits[i] : 0.0f;
-    }
 }
 
 void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
@@ -874,6 +1032,10 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
         m_LightingShader->SetInt  (n.LightType, L.LightType);
         m_LightingShader->SetFloat(n.InnerCutoff, L.InnerCutoff);
         m_LightingShader->SetFloat(n.OuterCutoff, L.OuterCutoff);
+        m_LightingShader->SetInt  (n.ShadowMode,      L.ShadowMode);
+        m_LightingShader->SetFloat(n.ShadowStrength,  L.ShadowStrength);
+        m_LightingShader->SetFloat(n.BiasMultiplier,  L.BiasMultiplier);
+        m_LightingShader->SetInt  (n.ShadowSlot,      L.ShadowSlot);
     }
         // ---- Shadow map ------------------------------------------------------
     {
@@ -906,6 +1068,36 @@ void DeferredRenderer::LightingPass(const std::vector<GPULight>& lights,
             m_LightingShader->SetFloat("u_ShadowStrength",   m_ShadowCaster.ShadowStrength);
             m_LightingShader->SetFloat("u_BiasMultiplier",   m_ShadowCaster.BiasMultiplier);
         }
+            // ---- Spot shadows ----------------------------------------------------
+    if (m_SpotShadowCount > 0)
+    {
+        m_SpotShadowMap.Bind(7);
+        m_LightingShader->SetInt("u_SpotShadowMap", 7);
+        m_LightingShader->SetMat4Array("u_SpotLightSpaceMatrix",
+                                       m_SpotLightSpaceMatrix,
+                                       (int)m_SpotShadowCount);
+    }
+    else
+    {
+        m_LightingShader->SetInt("u_SpotShadowMap", 7);
+    }
+
+    // ---- Point shadows ---------------------------------------------------
+    if (m_PointShadowCount > 0)
+    {
+        m_PointShadowMap.Bind(8);
+        m_LightingShader->SetInt("u_PointShadowMap", 8);
+        m_LightingShader->SetFloatArray("u_PointShadowNear",
+                                        m_PointShadowNear,
+                                        (int)m_PointShadowCount);
+        m_LightingShader->SetFloatArray("u_PointShadowFar",
+                                        m_PointShadowFar,
+                                        (int)m_PointShadowCount);
+    }
+    else
+    {
+        m_LightingShader->SetInt("u_PointShadowMap", 8);
+    }
     }
 
     DrawFullscreenQuad();
@@ -1371,6 +1563,7 @@ void DeferredRenderer::ReloadShaders()
     reloadSafe(m_BloomUpShader);
     reloadSafe(m_OutlineShader);
     reloadSafe(m_ShadowDepthShader);
+    reloadSafe(m_ShadowDepthPointShader);
 
     BINAX_LOG_INFO("Shaders reloaded from disk");
 }

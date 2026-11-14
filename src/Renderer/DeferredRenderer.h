@@ -17,6 +17,7 @@
 #include "Renderer/MeshLibrary.h"
 #include "Renderer/Shader.h"
 #include "Renderer/ShadowMap.h"
+#include "Renderer/ShadowCubemap.h"
 #include "Renderer/ShadowSettings.h"
 
 #include "ECS/Systems/RenderSystem.h"
@@ -155,10 +156,11 @@ public:
                            const glm::mat4& viewMatrix,
                            const glm::mat4& projectionMatrix,
                            uint32_t width, uint32_t height);
+
     void RenderShadowPass(FrameRenderData& frame,
                           const glm::mat4& camView,
                           const glm::mat4& camProj,
-                          const std::vector<GPULight>& lights,
+                          std::vector<GPULight>& lights,
                           const ShadowSettings& settings);
 
 private:
@@ -184,10 +186,8 @@ private:
     std::unique_ptr<Framebuffer> m_BloomMips[kBloomMipCount];
 
     std::unique_ptr<Framebuffer> m_TAAHistory[2];
-        std::unique_ptr<Framebuffer> m_OutlineFBO;
+    std::unique_ptr<Framebuffer> m_OutlineFBO;
     bool                         m_HasOutline = false;
-    
-
 
     int  m_TAAHistoryIndex = 0;
     bool m_TAAHistoryValid = false;
@@ -203,10 +203,6 @@ private:
     uint32_t m_DrawIndirectSSBO = 0;
     uint32_t m_BonesDummySSBO   = 0;
     uint32_t m_DrawCapacity     = 0;
-
-    
-    
-    
     uint32_t m_GroupDataSSBO    = 0;
 
     uint32_t m_DrawStateSSBO = 0;
@@ -217,7 +213,7 @@ private:
         uint32_t Draws             = 0;
         uint32_t Vertices          = 0;
         uint32_t Indices           = 0;
-        uint32_t VisibleInstances  = 0;   
+        uint32_t VisibleInstances  = 0;
     };
     CullStats m_LastCullStats;
 
@@ -226,6 +222,41 @@ private:
 
     FrameStats m_FrameStats;
 
+    // ---- Shadow state (Directional CSM + Spot + Point) --------------------
+    std::unique_ptr<Shader> m_ShadowDepthShader;
+    std::unique_ptr<Shader> m_ShadowDepthPointShader;
+
+    ShadowMap     m_ShadowMap;         // Directional CSM (2D array)
+    ShadowMap     m_SpotShadowMap;     // 2D array, по 1 слою на spot
+    ShadowCubemap m_PointShadowMap;    // cubemap array, по 1 кубу на point
+
+    glm::mat4 m_SpotLightSpaceMatrix[kMaxSpotShadows]{};
+    float     m_PointShadowNear[kMaxPointShadows]{};
+    float     m_PointShadowFar [kMaxPointShadows]{};
+    uint32_t  m_SpotShadowCount  = 0;
+    uint32_t  m_PointShadowCount = 0;
+
+    uint32_t m_ShadowIndirectSSBO     = 0;
+    uint32_t m_ShadowIndirectCapacity = 0;
+
+    struct ShadowCasterInfo
+    {
+        int   LightIndex = -1;
+        int   ShadowMode = 0;
+        int   CascadeCount = 0;
+        float ShadowStrength = 1.0f;
+        float BiasMultiplier = 1.0f;
+        float MaxShadowDistance = 0.0f;
+        float FadeOutDistance = 0.0f;
+        float DepthBias = 0.0f;
+        float NormalBias = 0.0f;
+        float ShadowSoftness = 1.0f;
+        glm::mat4 LightSpaceMatrices[4]{};
+        float CascadeSplits[4]{};
+    };
+    ShadowCasterInfo m_ShadowCaster;
+
+    // ---- Helpers ---------------------------------------------------------
     void InitShaders();
     void InitCullResources();
     void EnsureQuad();
@@ -259,7 +290,6 @@ private:
                       uint32_t bloomTexture,
                       float timeSeconds);
 
-    
     void PrepareCullPass(const glm::mat4& viewMatrix,
                          const glm::mat4& projectionMatrix,
                          uint32_t groupCount);
@@ -270,30 +300,20 @@ private:
                    uint32_t targetFBO,
                    uint32_t width, uint32_t height,
                    const FXAAParams& params);
-        std::unique_ptr<Shader> m_ShadowDepthShader;
-    ShadowMap               m_ShadowMap;
-    uint32_t                m_ShadowIndirectSSBO = 0;
-    uint32_t                m_ShadowIndirectCapacity = 0;
 
-    struct ShadowCasterInfo
-    {
-        int   LightIndex = -1;
-        int   ShadowMode = 0;
-        int   CascadeCount = 0;
-        float ShadowStrength = 1.0f;
-        float BiasMultiplier = 1.0f;
-        float MaxShadowDistance = 0.0f;
-        float FadeOutDistance = 0.0f;
-        float DepthBias = 0.0f;
-        float NormalBias = 0.0f;
-        float ShadowSoftness = 1.0f;
-        glm::mat4 LightSpaceMatrices[4]{};
-        float CascadeSplits[4]{};
-    };
-    ShadowCasterInfo m_ShadowCaster;
-
+    // ---- Shadow helpers --------------------------------------------------
     void EnsureShadowMap(uint32_t size, uint32_t layers);
+    void EnsureSpotShadowMap(uint32_t size);
+    void EnsurePointShadowMap(uint32_t size);
     void EnsureShadowDrawBuffers(uint32_t drawCount);
+
+    void RenderSpotShadow (const GPULight& light, int slot,
+                           FrameRenderData& frame,
+                           const ShadowSettings& settings);
+    void RenderPointShadow(const GPULight& light, int slot,
+                           FrameRenderData& frame,
+                           const ShadowSettings& settings);
+
     void ComputeCascades(const glm::mat4& camView,
                          float nearPlane, float farPlane,
                          float fovY, float aspect,

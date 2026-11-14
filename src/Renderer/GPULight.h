@@ -6,7 +6,6 @@ namespace Binax {
 struct GPULight
 {
     enum Type : int { Directional = 0, Point = 1, Spot = 2 };
-
     glm::vec3 Position    = glm::vec3(0.0f);
     float     Range       = 10.0f;
     glm::vec3 Direction   = glm::vec3(0.0f, -1.0f, 0.0f);
@@ -15,16 +14,16 @@ struct GPULight
     int       LightType   = Directional;
     float     InnerCutoff = 0.9f;
     float     OuterCutoff = 0.8f;
-
-    // ---- Shadows (Directional only пока) -------------------------------
-    int   ShadowMode      = 0;       // 0=None, 1=Hard, 2=Soft
+    int   ShadowMode      = 0; 
     float ShadowStrength  = 1.0f;
     float BiasMultiplier  = 1.0f;
-
+    int   ShadowSlot      = -1;
     float _pad0 = 0.0f;
     float _pad1 = 0.0f;
 };
 
-constexpr int kMaxLights = 32;
+constexpr int kMaxLights          = 32;
+constexpr int kMaxSpotShadows     = 4;
+constexpr int kMaxPointShadows    = 2;
 
 }

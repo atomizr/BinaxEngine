@@ -4,7 +4,7 @@ in  vec2 v_UV;
 out vec4 FragColor;
 
 uniform sampler2D u_PositionTexture;
-uniform sampler2D u_NormalTexture;   // rgb=normal, a=unlitFlag
+uniform sampler2D u_NormalTexture;
 uniform sampler2D u_AlbedoTexture;
 uniform sampler2D u_MaterialTexture;
 uniform sampler2D u_OutlineTexture;
@@ -25,13 +25,13 @@ uniform float u_FogDensity;
 uniform float u_FogStart;
 uniform float u_FogEnd;
 
-// ---- Shadows (CSM Directional) -----------------------------------------
+// ---- Shadows: Directional (CSM) ----------------------------------------
 uniform sampler2DArray u_ShadowMap;
 uniform mat4  u_LightSpaceMatrices[4];
 uniform float u_CascadeSplits[4];
 uniform int   u_CascadeCount;
-uniform int   u_ShadowMode;          // 0=None, 1=Hard, 2=Soft
-uniform int   u_ShadowLightIndex;    // -1 = no shadow caster
+uniform int   u_ShadowMode;
+uniform int   u_ShadowLightIndex;
 uniform float u_DepthBias;
 uniform float u_NormalBias;
 uniform float u_ShadowSoftness;
@@ -40,6 +40,15 @@ uniform float u_FadeOutDistance;
 uniform float u_ShadowStrength;
 uniform float u_BiasMultiplier;
 uniform mat4  u_ViewMatrix;
+
+// ---- Shadows: Spot -----------------------------------------------------
+uniform sampler2DArray u_SpotShadowMap;
+uniform mat4           u_SpotLightSpaceMatrix[4];
+
+// ---- Shadows: Point ----------------------------------------------------
+uniform samplerCubeArray u_PointShadowMap;
+uniform float            u_PointShadowNear[2];
+uniform float            u_PointShadowFar [2];
 
 const int MAX_LIGHTS = 32;
 struct Light {
@@ -51,6 +60,10 @@ struct Light {
     int   LightType;
     float InnerCutoff;
     float OuterCutoff;
+    int   ShadowMode;
+    float ShadowStrength;
+    float BiasMultiplier;
+    int   ShadowSlot;
 };
 uniform Light u_Lights[MAX_LIGHTS];
 uniform int   u_LightCount;
@@ -58,43 +71,30 @@ uniform int   u_LightCount;
 const float PI = 3.14159265359;
 
 // ============================================================================
-// Outline dilate
+// Outline
 // ============================================================================
 vec3 OutlineComposite(vec3 baseColor, vec2 uv)
 {
-    if (u_HasOutline != 1)
-        return baseColor;
+    if (u_HasOutline != 1) return baseColor;
 
     vec2 texel = 1.0 / vec2(textureSize(u_OutlineTexture, 0));
 
     float center = texture(u_OutlineTexture, uv).a;
-    if (center > 0.5)
-        return baseColor;
+    if (center > 0.5) return baseColor;
 
-    const int   R      = 2;
-    const float step   = 1.0;
+    const int R = 2;
     float found = 0.0;
-
     for (int y = -R; y <= R; ++y)
+    for (int x = -R; x <= R; ++x)
     {
-        for (int x = -R; x <= R; ++x)
-        {
-            if (x == 0 && y == 0) continue;
-            float d2 = float(x*x + y*y);
-            if (d2 > float(R*R)) continue;
-
-            float a = texture(u_OutlineTexture,
-                              uv + vec2(x, y) * texel * step).a;
-            if (a > 0.5) { found = 1.0; break; }
-        }
-        if (found > 0.5) break;
+        if (x == 0 && y == 0) continue;
+        if (float(x*x + y*y) > float(R*R)) continue;
+        float a = texture(u_OutlineTexture, uv + vec2(x, y) * texel).a;
+        if (a > 0.5) { found = 1.0; break; }
     }
+    if (found < 0.5) return baseColor;
 
-    if (found < 0.5)
-        return baseColor;
-
-    vec3 outlineColor = vec3(0.36, 0.56, 1.0);
-    return outlineColor;
+    return vec3(0.36, 0.56, 1.0);
 }
 
 // ============================================================================
@@ -107,24 +107,17 @@ float D_GGX(float NdotH, float roughness)
     float d  = NdotH * NdotH * (a2 - 1.0) + 1.0;
     return a2 / max(PI * d * d, 1e-6);
 }
-
-float G_SchlickGGX(float NdotX, float k)
-{
-    return NdotX / (NdotX * (1.0 - k) + k);
-}
-
+float G_SchlickGGX(float NdotX, float k) { return NdotX / (NdotX * (1.0 - k) + k); }
 float G_Smith(float NdotV, float NdotL, float roughness)
 {
     float r = roughness + 1.0;
     float k = (r * r) / 8.0;
     return G_SchlickGGX(NdotV, k) * G_SchlickGGX(NdotL, k);
 }
-
 vec3 F_Schlick(float cosTheta, vec3 F0)
 {
     return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
-
 vec3 EvaluateBRDF(vec3 N, vec3 V, vec3 L, vec3 radiance,
                   vec3 albedo, float metallic, float roughness)
 {
@@ -137,20 +130,15 @@ vec3 EvaluateBRDF(vec3 N, vec3 V, vec3 L, vec3 radiance,
     float NdotL = max(dot(N, L), 0.0);
     float NdotH = max(dot(N, H), 0.0);
     float HdotV = max(dot(H, V), 0.0);
-
     if (NdotL <= 0.0) return vec3(0.0);
 
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
-
     float D = D_GGX(NdotH, roughness);
     float G = G_Smith(NdotV, NdotL, roughness);
     vec3  F = F_Schlick(HdotV, F0);
-
     vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
-
     vec3 kD = (1.0 - F) * (1.0 - metallic);
     vec3 diffuse = kD * albedo / PI;
-
     return (diffuse + specular) * radiance * NdotL;
 }
 
@@ -177,83 +165,183 @@ vec3 SampleSkybox(vec3 dir)
         dir.x * c - dir.z * s,
         dir.y,
         dir.x * s + dir.z * c);
-
     return texture(u_EnvironmentMap, rotated).rgb * u_SkyboxBrightness;
 }
 
 // ============================================================================
-// Shadow sampling (CSM)
+// Directional (CSM) shadow
 // ============================================================================
-float SampleShadow(vec3 worldPos, vec3 N, vec3 L, float viewZ)
+float SampleDirectionalShadow(vec3 worldPos, vec3 N, vec3 L, float viewZ)
 {
-    if (u_ShadowMode == 0 || u_CascadeCount == 0)
-        return 1.0;
+    if (u_ShadowMode == 0 || u_CascadeCount == 0) return 1.0;
 
-    // Выбор каскада по view-space Z
     int cascadeIdx = u_CascadeCount - 1;
     for (int i = 0; i < u_CascadeCount; ++i)
     {
         if (viewZ < u_CascadeSplits[i]) { cascadeIdx = i; break; }
     }
 
-    // Normal offset bias
-    vec3 offsetWorld   = worldPos + N * u_NormalBias;
-    vec4 lightSpacePos = u_LightSpaceMatrices[cascadeIdx] * vec4(offsetWorld, 1.0);
-    vec3 projCoords    = lightSpacePos.xyz / lightSpacePos.w;
+    vec4 lsPos = u_LightSpaceMatrices[cascadeIdx]
+                 * vec4(worldPos + N * u_NormalBias, 1.0);
+    vec3 projCoords = lsPos.xyz / lsPos.w;
     projCoords = projCoords * 0.5 + 0.5;
 
-    // За пределами карты теней — не в тени
     if (projCoords.z > 1.0 ||
         projCoords.x < 0.0 || projCoords.x > 1.0 ||
         projCoords.y < 0.0 || projCoords.y > 1.0)
         return 1.0;
 
-    // Slope-scaled depth bias
     float NdotL = max(dot(N, L), 0.0);
     float bias  = u_DepthBias * u_BiasMultiplier * (1.0 + (1.0 - NdotL) * 2.0);
     float depth = projCoords.z - bias;
 
     float shadow = 1.0;
-
     if (u_ShadowMode == 1)
     {
-        // Hard
         float d = texture(u_ShadowMap,
                           vec3(projCoords.xy, float(cascadeIdx))).r;
         shadow = (depth > d) ? 0.0 : 1.0;
     }
     else
     {
-        // Soft PCF
         float softness = clamp(u_ShadowSoftness, 0.5, 4.0);
-        int   rad      = int(ceil(softness));
-        vec2  texel    = softness / vec2(textureSize(u_ShadowMap, 0).xy);
-        float count    = 0.0;
-        float sum      = 0.0;
-
+        int rad = int(ceil(softness));
+        vec2 texel = softness / vec2(textureSize(u_ShadowMap, 0).xy);
+        float sum = 0.0, cnt = 0.0;
         for (int y = -rad; y <= rad; ++y)
+        for (int x = -rad; x <= rad; ++x)
         {
-            for (int x = -rad; x <= rad; ++x)
-            {
-                float d = texture(u_ShadowMap,
-                                  vec3(projCoords.xy + vec2(x, y) * texel,
-                                       float(cascadeIdx))).r;
-                sum   += (depth > d) ? 0.0 : 1.0;
-                count += 1.0;
-            }
+            float d = texture(u_ShadowMap,
+                              vec3(projCoords.xy + vec2(x,y)*texel,
+                                   float(cascadeIdx))).r;
+            sum += (depth > d) ? 0.0 : 1.0;
+            cnt += 1.0;
         }
-        shadow = sum / max(count, 1.0);
+        shadow = sum / max(cnt, 1.0);
     }
 
-    // Fade-out у MaxShadowDistance
     if (viewZ > u_MaxShadowDistance - u_FadeOutDistance)
     {
         float fade = 1.0 - (viewZ - (u_MaxShadowDistance - u_FadeOutDistance))
-                           / max(u_FadeOutDistance, 1e-3);
+                            / max(u_FadeOutDistance, 1e-3);
         shadow = mix(1.0, shadow, clamp(fade, 0.0, 1.0));
     }
-
     return mix(1.0, shadow, u_ShadowStrength);
+}
+
+// ============================================================================
+// Spot shadow
+// ============================================================================
+float SampleSpotShadow(int lightIdx, vec3 worldPos, vec3 N, vec3 L)
+{
+    int slot = u_Lights[lightIdx].ShadowSlot;
+    if (slot < 0 || slot >= 4) return 1.0;
+
+    vec4 lsPos = u_SpotLightSpaceMatrix[slot]
+                 * vec4(worldPos + N * u_NormalBias, 1.0);
+    vec3 projCoords = lsPos.xyz / lsPos.w;
+    projCoords = projCoords * 0.5 + 0.5;
+
+    if (projCoords.z > 1.0 ||
+        projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0)
+        return 1.0;
+
+    float NdotL = max(dot(N, L), 0.0);
+    float bias  = u_DepthBias * u_Lights[lightIdx].BiasMultiplier
+                * (1.0 + (1.0 - NdotL) * 2.0);
+    float depth = projCoords.z - bias;
+
+    float shadow = 1.0;
+    if (u_Lights[lightIdx].ShadowMode == 1)
+    {
+        float d = texture(u_SpotShadowMap, vec3(projCoords.xy, float(slot))).r;
+        shadow = (depth > d) ? 0.0 : 1.0;
+    }
+    else
+    {
+        float softness = clamp(u_ShadowSoftness, 0.5, 4.0);
+        int rad = int(ceil(softness));
+        vec2 texel = softness / vec2(textureSize(u_SpotShadowMap, 0).xy);
+        float sum = 0.0, cnt = 0.0;
+        for (int y = -rad; y <= rad; ++y)
+        for (int x = -rad; x <= rad; ++x)
+        {
+            float d = texture(u_SpotShadowMap,
+                              vec3(projCoords.xy + vec2(x,y)*texel,
+                                   float(slot))).r;
+            sum += (depth > d) ? 0.0 : 1.0;
+            cnt += 1.0;
+        }
+        shadow = sum / max(cnt, 1.0);
+    }
+    return mix(1.0, shadow, u_Lights[lightIdx].ShadowStrength);
+}
+
+// ============================================================================
+// Point shadow
+// ============================================================================
+float LinearizeDepth(float d, float nearP, float farP)
+{
+    float z = d * 2.0 - 1.0;
+    return (2.0 * nearP * farP) / (farP + nearP - z * (farP - nearP));
+}
+
+float SamplePointShadow(int lightIdx, vec3 worldPos, vec3 N, vec3 L)
+{
+    int slot = u_Lights[lightIdx].ShadowSlot;
+    if (slot < 0 || slot >= 2) return 1.0;
+
+    vec3 lightPos = u_Lights[lightIdx].Position;
+    vec3 fragToLight = worldPos - lightPos;
+
+    // Перспективный Z для 90°-FOV куба = max(|x|,|y|,|z|)
+    float fragZ = max(max(abs(fragToLight.x), abs(fragToLight.y)),
+                      abs(fragToLight.z));
+    float nearP = u_PointShadowNear[slot];
+    float farP  = u_PointShadowFar[slot];
+
+    float NdotL = max(dot(N, L), 0.0);
+    float relBias = u_DepthBias * u_Lights[lightIdx].BiasMultiplier
+                  * (1.0 + (1.0 - NdotL) * 2.0);
+    float biasWorld = relBias * fragZ;
+
+    float shadow = 1.0;
+    if (u_Lights[lightIdx].ShadowMode == 1)
+    {
+        float d = texture(u_PointShadowMap,
+                          vec4(fragToLight, float(slot))).r;
+        float storedZ = LinearizeDepth(d, nearP, farP);
+        shadow = (fragZ > storedZ + biasWorld) ? 0.0 : 1.0;
+    }
+    else
+    {
+        float softness = clamp(u_ShadowSoftness, 0.5, 2.0);
+        float angularRadius = softness * 0.005;
+
+        vec3 up = (abs(fragToLight.y) < 0.99)
+                  ? vec3(0,1,0) : vec3(1,0,0);
+        vec3 tangent   = normalize(cross(fragToLight, up));
+        vec3 bitangent = cross(fragToLight, tangent);
+
+        const vec2 offsets[4] = vec2[4](
+            vec2(-0.5,-0.5), vec2(0.5,-0.5),
+            vec2(-0.5, 0.5), vec2(0.5, 0.5));
+
+        float sum = 0.0;
+        for (int k = 0; k < 4; ++k)
+        {
+            vec3 dir = fragToLight
+                     + (offsets[k].x * tangent + offsets[k].y * bitangent)
+                       * angularRadius * fragZ;
+            float d = texture(u_PointShadowMap,
+                              vec4(dir, float(slot))).r;
+            float storedZ = LinearizeDepth(d, nearP, farP);
+            sum += (fragZ > storedZ + biasWorld) ? 0.0 : 1.0;
+        }
+        shadow = sum / 4.0;
+    }
+    return mix(1.0, shadow, u_Lights[lightIdx].ShadowStrength);
 }
 
 // ============================================================================
@@ -278,9 +366,7 @@ void main()
     bool  skyReflEnabled  = mat.a >= 0.0;
     float skyReflStrength = max(mat.a, 0.0);
 
-    // ============================================================
-    // UNLIT — только albedo * (1 + emissive), без света
-    // ============================================================
+    // Unlit
     if (isUnlit)
     {
         vec3 color = albedo * (1.0 + emissive);
@@ -289,28 +375,20 @@ void main()
         return;
     }
 
-    // ============================================================
-    // SKY
-    // ============================================================
+    // Sky
     if (dot(Nraw, Nraw) < 1e-4)
     {
         vec3 color = vec3(0.0);
-
         if (u_HasEnvironment == 1)
         {
             vec3 dir = ComputeRayDirection();
             color = SampleSkybox(dir);
         }
-
         color = OutlineComposite(color, v_UV);
-
         FragColor = vec4(color, 1.0);
         return;
     }
 
-    // ============================================================
-    // STANDARD LIGHTING
-    // ============================================================
     vec3 N = normalize(Nraw);
     vec3 V = normalize(u_CameraPosition - worldPos);
     vec3 Lo = vec3(0.0);
@@ -353,13 +431,28 @@ void main()
         }
 
         float lightShadow = 1.0;
-        if (i == u_ShadowLightIndex && u_ShadowMode != 0)
-            lightShadow = SampleShadow(worldPos, N, L, viewZ);
+        if (u_Lights[i].ShadowMode != 0)
+        {
+            if (u_Lights[i].LightType == 0)
+            {
+                if (i == u_ShadowLightIndex)
+                    lightShadow = SampleDirectionalShadow(worldPos, N, L, viewZ);
+            }
+            else if (u_Lights[i].LightType == 2)
+            {
+                lightShadow = SampleSpotShadow(i, worldPos, N, L);
+            }
+            else
+            {
+                lightShadow = SamplePointShadow(i, worldPos, N, L);
+            }
+        }
 
-        Lo += EvaluateBRDF(N, V, L, radiance, albedo, metallic, roughness) * lightShadow;
+        Lo += EvaluateBRDF(N, V, L, radiance, albedo, metallic, roughness)
+              * lightShadow;
     }
 
-    // ---- Ambient / IBL --------------------------------------------------
+    // Ambient
     vec3 skyColor    = vec3(0.35, 0.42, 0.55);
     vec3 groundColor = vec3(0.12, 0.10, 0.08);
     float hemi       = N.y * 0.5 + 0.5;
@@ -374,45 +467,33 @@ void main()
         {
             vec3 R    = reflect(-V, N);
             vec3 skyR = SampleSkybox(R);
-
             vec3 reflTint = mix(vec3(1.0), albedo, metallic);
-
             float NdotV   = max(dot(N, V), 1e-4);
             float graze   = pow(1.0 - NdotV, 5.0);
             float fresnel = mix(1.0, 1.6, graze);
-
             ambient += skyR * reflTint * fresnel * skyReflStrength * ao;
         }
     }
 
     vec3 color = ambient + Lo + albedo * emissive;
 
-    // ---- Fog ------------------------------------------------------------
     if (u_FogEnabled == 1)
     {
         const float dist = length(u_CameraPosition - worldPos);
-
         float fog = 0.0;
         if (u_FogMode == 0)
-        {
-            fog = clamp((dist - u_FogStart) / max(u_FogEnd - u_FogStart, 1e-4),
-                        0.0, 1.0);
-        }
+            fog = clamp((dist - u_FogStart) / max(u_FogEnd - u_FogStart, 1e-4), 0.0, 1.0);
         else if (u_FogMode == 1)
-        {
             fog = 1.0 - exp(-max(dist, 0.0) * max(u_FogDensity, 0.0));
-        }
         else
         {
             const float d = max(dist, 0.0) * max(u_FogDensity, 0.0);
             fog = 1.0 - exp(-d * d);
         }
-
         const vec3 fogLinear = pow(max(u_FogColor, vec3(0.0)), vec3(2.2));
         color = mix(color, fogLinear, clamp(fog, 0.0, 1.0));
     }
 
-    // ---- Outline --------------------------------------------------------
     color = OutlineComposite(color, v_UV);
 
     FragColor = vec4(color, 1.0);

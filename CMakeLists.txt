@@ -46,6 +46,7 @@ set(SOURCES
     src/Renderer/MeshImporter.cpp
     src/Renderer/ShadowSettings.cpp
     src/Renderer/ShadowMap.cpp
+    src/Renderer/ShadowCubemap.cpp
 
     src/Editor/EditorUI.cpp
     src/Editor/EditorCamera.cpp

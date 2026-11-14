@@ -69,37 +69,30 @@ BINAX_REFLECT(Binax::LightComponent)
     info.Add(&LightComponent::Range,       "Range",        PropertyKind::Float).SetRange(0.1f, 100.0f);
     info.Add(&LightComponent::InnerCutoff, "Inner Cutoff", PropertyKind::Float).SetRange(0.0f, 1.0f);
     info.Add(&LightComponent::OuterCutoff, "Outer Cutoff", PropertyKind::Float).SetRange(0.0f, 1.0f);
-        // ---- Shadow fields (Directional only) ---------------------------------
-    auto isDirectional = [](const void* p) {
-        return static_cast<const LightComponent*>(p)->Type == LightType::Directional;
-    };
 
+    // ---- Shadow fields (Directional / Spot / Point) -------------------
+    // VisibleWhen НЕ ставим — поля нужны для всех трёх типов.
     info.Add(&LightComponent::ShadowMode, "Shadow Mode", PropertyKind::Enum)
         .SetEnums({
             { (int)ShadowMode::None, "None" },
             { (int)ShadowMode::Hard, "Hard" },
             { (int)ShadowMode::Soft, "Soft" }
-        })
-        .SetVisibleWhen(isDirectional);
+        });
 
     info.Add(&LightComponent::ShadowResolutionMode, "Shadow Res Mode", PropertyKind::Enum)
         .SetEnums({
             { (int)ShadowResolutionMode::Global, "Global" },
             { (int)ShadowResolutionMode::Custom, "Custom" }
-        })
-        .SetVisibleWhen(isDirectional);
+        });
 
     info.Add(&LightComponent::ShadowResolution, "Shadow Resolution", PropertyKind::Int)
-        .SetRange(512.0f, 4096.0f).SetSpeed(256.0f)
-        .SetVisibleWhen(isDirectional);
+        .SetRange(512.0f, 4096.0f).SetSpeed(256.0f);
 
     info.Add(&LightComponent::ShadowStrength, "Shadow Strength", PropertyKind::Float)
-        .SetRange(0.0f, 1.0f)
-        .SetVisibleWhen(isDirectional);
+        .SetRange(0.0f, 1.0f);
 
     info.Add(&LightComponent::BiasMultiplier, "Bias Multiplier", PropertyKind::Float)
-        .SetRange(0.1f, 10.0f).SetSpeed(0.05f)
-        .SetVisibleWhen(isDirectional);
+        .SetRange(0.1f, 10.0f).SetSpeed(0.05f);
 }
 
 BINAX_REFLECT(Binax::MeshComponent)
