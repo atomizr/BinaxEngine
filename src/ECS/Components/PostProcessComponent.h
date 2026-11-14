@@ -47,6 +47,15 @@ struct PostProcessComponent
     float BloomThreshold = 1.0f;
     float BloomIntensity = 0.15f;
 
+
+        // ---- SSAO ---------------------------------------------------------
+    bool  SSAOEnabled   = true;
+    float SSAORadius    = 0.5f;
+    float SSAOIntensity = 1.0f;
+    float SSAOBias      = 0.025f;
+    float SSAOPower     = 1.5f;
+    int   SSAOSamples   = 16;
+
     
     bool  MotionBlurEnabled  = true;
     float MotionBlurStrength = 0.5f;

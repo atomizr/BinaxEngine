@@ -162,6 +162,19 @@ BINAX_REFLECT(Binax::PostProcessComponent)
     info.Add(&PostProcessComponent::BloomIntensity, "Bloom Intensity", PropertyKind::Float)
         .SetRange(0.0f, 2.0f).SetSpeed(0.005f);
 
+        // ---- SSAO ---------------------------------------------------------
+    info.Add(&PostProcessComponent::SSAOEnabled,   "SSAO",           PropertyKind::Bool);
+    info.Add(&PostProcessComponent::SSAORadius,    "SSAO Radius",    PropertyKind::Float)
+        .SetRange(0.01f, 5.0f).SetSpeed(0.01f);
+    info.Add(&PostProcessComponent::SSAOIntensity, "SSAO Intensity", PropertyKind::Float)
+        .SetRange(0.0f, 3.0f).SetSpeed(0.01f);
+    info.Add(&PostProcessComponent::SSAOBias,      "SSAO Bias",      PropertyKind::Float)
+        .SetRange(0.0f, 0.5f).SetSpeed(0.001f);
+    info.Add(&PostProcessComponent::SSAOPower,     "SSAO Power",     PropertyKind::Float)
+        .SetRange(0.5f, 5.0f).SetSpeed(0.01f);
+    info.Add(&PostProcessComponent::SSAOSamples,   "SSAO Samples",   PropertyKind::Int)
+        .SetRange(4.0f, 32.0f);
+
     
     info.Add(&PostProcessComponent::MotionBlurEnabled,  "Motion Blur",         PropertyKind::Bool);
     info.Add(&PostProcessComponent::MotionBlurStrength, "Motion Blur Strength", PropertyKind::Float)

@@ -141,6 +141,13 @@ Binax::PostProcessSettings GatherPostProcessSettings(entt::registry& registry)
         s.BloomThreshold = c.BloomThreshold;
         s.BloomIntensity = c.BloomIntensity;
 
+        s.SSAOEnabled   = c.SSAOEnabled;
+        s.SSAORadius    = c.SSAORadius;
+        s.SSAOIntensity = c.SSAOIntensity;
+        s.SSAOBias      = c.SSAOBias;
+        s.SSAOPower     = c.SSAOPower;
+        s.SSAOSamples   = c.SSAOSamples;
+
         s.MotionBlurEnabled  = c.MotionBlurEnabled;
         s.MotionBlurStrength = c.MotionBlurStrength;
         s.MotionBlurSamples  = c.MotionBlurSamples;

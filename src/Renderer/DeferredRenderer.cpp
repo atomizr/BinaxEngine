@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <random>
 
 namespace {
 
@@ -79,6 +80,7 @@ DeferredRenderer::DeferredRenderer(uint32_t width, uint32_t height)
     InitCullResources();
     EnsureQuad();
     EnsurePostTargets(width, height);
+    GenerateSSAOKernel();
 }
 
 DeferredRenderer::~DeferredRenderer()
@@ -313,6 +315,8 @@ void DeferredRenderer::InitShaders()
         m_ForwardShader = Shader::FromFiles(
         Paths::Resolve(dir + "forward.vert"),
         Paths::Resolve(dir + "forward.frag"));
+            m_SSAOShader     = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "ssao.frag"));
+    m_SSAOBlurShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "ssao_blur.frag"));
 
     const std::string cullPath = Paths::Resolve(dir + "frustum_cull.comp");
     try
@@ -968,6 +972,12 @@ void DeferredRenderer::LightingPass(
     const glm::mat4 viewProj     = projJittered * viewMatrix;
     const glm::mat4 invViewProj  = glm::inverse(viewProj);
 
+        // ---- SSAO pre-pass ------------------------------------------------
+    if (post.Enabled && post.SSAOEnabled)
+        SSAOPass(viewMatrix, projectionMatrix, post);
+    else
+        m_HasSSAO = false;
+
     if (!m_HasPrevViewProj)
     {
         m_PrevViewProj    = viewProj;
@@ -990,6 +1000,19 @@ void DeferredRenderer::LightingPass(
     m_LightingShader->SetInt("u_NormalTexture",   1);
     m_LightingShader->SetInt("u_AlbedoTexture",   2);
     m_LightingShader->SetInt("u_MaterialTexture", 3);
+
+    if (m_HasSSAO && m_SSAOFBO)
+    {
+        glActiveTexture(GL_TEXTURE0 + 9);
+        glBindTexture(GL_TEXTURE_2D, m_SSAOFBO->GetColorAttachment(0));
+        m_LightingShader->SetInt  ("u_SSAOTexture",   9);
+        m_LightingShader->SetInt  ("u_HasSSAO",       1);
+        m_LightingShader->SetFloat("u_SSAOIntensity", glm::clamp(post.SSAOIntensity, 0.0f, 3.0f));
+    }
+    else
+    {
+        m_LightingShader->SetInt("u_HasSSAO", 0);
+    }
 
     if (m_HasOutline && m_OutlineFBO)
     {
@@ -1451,6 +1474,184 @@ void DeferredRenderer::ApplyFXAA(uint32_t sourceTexture,
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+void DeferredRenderer::GenerateSSAOKernel()
+{
+    std::mt19937 rng(1337);
+    std::uniform_real_distribution<float> randN(-1.0f, 1.0f);
+    std::uniform_real_distribution<float> rand01(0.0f, 1.0f);
+
+    for (int i = 0; i < 32; ++i)
+    {
+        glm::vec3 s(randN(rng), randN(rng), rand01(rng));
+        s = glm::normalize(s);
+        s *= rand01(rng);
+
+        // Больше сэмплов ближе к центру (лучшая детализация)
+        float scale = static_cast<float>(i) / 32.0f;
+        scale = glm::mix(0.1f, 1.0f, scale * scale);
+        s *= scale;
+
+        m_SSAOKernel[i] = s;
+    }
+}
+
+void DeferredRenderer::EnsureSSAOTargets(uint32_t width, uint32_t height)
+{
+    if (width == 0 || height == 0)
+        return;
+
+    const uint32_t halfW = std::max(1u, width  / 2u);
+    const uint32_t halfH = std::max(1u, height / 2u);
+
+    // m_SSAOFBO: raw AO → после V-blur содержит финальный результат
+    if (!m_SSAOFBO)
+    {
+        m_SSAOFBO = std::make_unique<Framebuffer>(halfW, halfH);
+        m_SSAOFBO->Bind();
+        m_SSAOFBO->AttachColorTexture(GL_R8, GL_RED, GL_UNSIGNED_BYTE, 0);
+        m_SSAOFBO->CheckStatus();
+        m_SSAOFBO->Unbind();
+
+        glBindTexture(GL_TEXTURE_2D, m_SSAOFBO->GetColorAttachment(0));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    else m_SSAOFBO->Resize(halfW, halfH);
+
+    // m_SSAOBlurFBO: промежуточный H-проход (потом читается в V-проходе)
+    if (!m_SSAOBlurFBO)
+    {
+        m_SSAOBlurFBO = std::make_unique<Framebuffer>(halfW, halfH);
+        m_SSAOBlurFBO->Bind();
+        m_SSAOBlurFBO->AttachColorTexture(GL_R8, GL_RED, GL_UNSIGNED_BYTE, 0);
+        m_SSAOBlurFBO->CheckStatus();
+        m_SSAOBlurFBO->Unbind();
+
+        glBindTexture(GL_TEXTURE_2D, m_SSAOBlurFBO->GetColorAttachment(0));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    else m_SSAOBlurFBO->Resize(halfW, halfH);
+}
+
+void DeferredRenderer::SSAOPass(const glm::mat4& viewMatrix,
+                                const glm::mat4& projectionMatrix,
+                                const PostProcessSettings& post)
+{
+    m_HasSSAO = false;
+    if (!m_SSAOShader || !m_SSAOBlurShader) return;
+
+    const uint32_t fullW = m_GBuffer->GetWidth();
+    const uint32_t fullH = m_GBuffer->GetHeight();
+    if (fullW == 0 || fullH == 0) return;
+
+    EnsureSSAOTargets(fullW, fullH);
+
+    const uint32_t halfW = std::max(1u, fullW / 2u);
+    const uint32_t halfH = std::max(1u, fullH / 2u);
+
+    const float projC = projectionMatrix[2][2];
+    const float projD = projectionMatrix[3][2];
+    const float nearPlane = (projC != 1.0f) ? projD / (projC - 1.0f) : 0.1f;
+    const float farPlane  = (projC != -1.0f) ? projD / (projC + 1.0f) : 100.0f;
+
+    GLfloat prev[4]; glGetFloatv(GL_COLOR_CLEAR_VALUE, prev);
+
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_BLEND);
+
+    // ---- 1. Raw AO at half-res --------------------------------------
+    m_SSAOFBO->Bind();
+    glViewport(0, 0, (GLsizei)halfW, (GLsizei)halfH);
+    glClearColor(1.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_GBuffer->GetDepthAttachment());
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, m_GBuffer->GetTexture(GBuffer::NORMAL));
+
+    m_SSAOShader->Bind();
+    m_SSAOShader->SetInt  ("u_DepthTexture",  0);
+    m_SSAOShader->SetInt  ("u_NormalTexture", 1);
+    m_SSAOShader->SetMat4 ("u_View",          viewMatrix);
+    m_SSAOShader->SetMat4 ("u_Projection",    projectionMatrix);
+    m_SSAOShader->SetMat4 ("u_InvProjection", glm::inverse(projectionMatrix));
+    m_SSAOShader->SetFloat("u_Radius",        glm::max(post.SSAORadius, 0.01f));
+    m_SSAOShader->SetFloat("u_Bias",          glm::max(post.SSAOBias,   0.0f));
+    m_SSAOShader->SetFloat("u_Power",         glm::max(post.SSAOPower,  0.1f));
+    m_SSAOShader->SetInt  ("u_Samples",       std::clamp(post.SSAOSamples, 4, 32));
+
+    for (int i = 0; i < 32; ++i)
+    {
+        const std::string n = "u_Kernel[" + std::to_string(i) + "]";
+        m_SSAOShader->SetVec3(n, m_SSAOKernel[i]);
+    }
+
+    DrawFullscreenQuad();
+    m_SSAOShader->Unbind();
+
+    // ---- 2. Bilateral blur — separable, 2 passes --------------------
+    const glm::vec2 halfTexel(1.0f / (float)halfW, 1.0f / (float)halfH);
+
+    // Pass H: m_SSAOFBO → m_SSAOBlurFBO
+    m_SSAOBlurFBO->Bind();
+    glViewport(0, 0, (GLsizei)halfW, (GLsizei)halfH);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_SSAOFBO->GetColorAttachment(0));
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, m_GBuffer->GetDepthAttachment());
+
+    m_SSAOBlurShader->Bind();
+    m_SSAOBlurShader->SetInt  ("u_AOTexture",    0);
+    m_SSAOBlurShader->SetInt  ("u_DepthTexture", 1);
+    m_SSAOBlurShader->SetVec2 ("u_TexelSize",    halfTexel);
+    m_SSAOBlurShader->SetVec2 ("u_BlurAxis",     glm::vec2(1.0f, 0.0f));
+    m_SSAOBlurShader->SetFloat("u_NearPlane",    nearPlane);
+    m_SSAOBlurShader->SetFloat("u_FarPlane",     farPlane);
+
+    DrawFullscreenQuad();
+    m_SSAOBlurShader->Unbind();
+
+    // Pass V: m_SSAOBlurFBO → m_SSAOFBO (final result back in m_SSAOFBO)
+    m_SSAOFBO->Bind();
+    glViewport(0, 0, (GLsizei)halfW, (GLsizei)halfH);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_SSAOBlurFBO->GetColorAttachment(0));
+    // depth уже на unit 1 — не перепривязываем
+
+    m_SSAOBlurShader->Bind();
+    m_SSAOBlurShader->SetInt  ("u_AOTexture",    0);
+    m_SSAOBlurShader->SetInt  ("u_DepthTexture", 1);
+    m_SSAOBlurShader->SetVec2 ("u_TexelSize",    halfTexel);
+    m_SSAOBlurShader->SetVec2 ("u_BlurAxis",     glm::vec2(0.0f, 1.0f));
+    m_SSAOBlurShader->SetFloat("u_NearPlane",    nearPlane);
+    m_SSAOBlurShader->SetFloat("u_FarPlane",     farPlane);
+
+    DrawFullscreenQuad();
+    m_SSAOBlurShader->Unbind();
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    m_SSAOFBO->Unbind();
+
+    glClearColor(prev[0], prev[1], prev[2], prev[3]);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+
+    m_HasSSAO = true;
+}
+
 void DeferredRenderer::ForwardTransparentPass(
     const FrameRenderData& frame,
     const glm::vec3& cameraPosition,
@@ -1697,6 +1898,8 @@ void DeferredRenderer::ReloadShaders()
     reloadSafe(m_OutlineShader);
     reloadSafe(m_ShadowDepthShader);
     reloadSafe(m_ShadowDepthPointShader);
+    reloadSafe(m_SSAOShader);
+    reloadSafe(m_SSAOBlurShader);
     reloadSafe(m_ForwardShader);
 
     BINAX_LOG_INFO("Shaders reloaded from disk");

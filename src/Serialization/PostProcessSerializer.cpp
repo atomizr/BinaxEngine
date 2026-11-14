@@ -73,6 +73,13 @@ bool PostProcessSerializer::Save(entt::registry& registry, const std::string& fi
     j["bloomThreshold"] = c->BloomThreshold;
     j["bloomIntensity"] = c->BloomIntensity;
 
+    j["ssaoEnabled"]   = c->SSAOEnabled;
+    j["ssaoRadius"]    = c->SSAORadius;
+    j["ssaoIntensity"] = c->SSAOIntensity;
+    j["ssaoBias"]      = c->SSAOBias;
+    j["ssaoPower"]     = c->SSAOPower;
+    j["ssaoSamples"]   = c->SSAOSamples;
+
     
     j["motionBlurEnabled"]  = c->MotionBlurEnabled;
     j["motionBlurStrength"] = c->MotionBlurStrength;
@@ -166,6 +173,13 @@ bool PostProcessSerializer::Load(entt::registry& registry, const std::string& fi
     c->BloomEnabled   = Bool(j, "bloomEnabled", true);
     c->BloomThreshold = Number(j, "bloomThreshold", 1.0f);
     c->BloomIntensity = Number(j, "bloomIntensity", 0.15f);
+
+    c->SSAOEnabled   = Bool  (j, "ssaoEnabled",   true);
+    c->SSAORadius    = Number(j, "ssaoRadius",    0.5f);
+    c->SSAOIntensity = Number(j, "ssaoIntensity", 1.0f);
+    c->SSAOBias      = Number(j, "ssaoBias",      0.025f);
+    c->SSAOPower     = Number(j, "ssaoPower",     1.5f);
+    c->SSAOSamples   = Int   (j, "ssaoSamples",   16);
 
     c->MotionBlurEnabled  = Bool(j, "motionBlurEnabled", true);
     c->MotionBlurStrength = Number(j, "motionBlurStrength", 0.5f);

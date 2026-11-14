@@ -64,6 +64,14 @@ struct PostProcessSettings
     float BloomThreshold = 1.0f;
     float BloomIntensity = 0.15f;
 
+        // SSAO
+    bool  SSAOEnabled   = true;
+    float SSAORadius    = 0.5f;
+    float SSAOIntensity = 1.0f;
+    float SSAOBias      = 0.025f;
+    float SSAOPower     = 1.5f;
+    int   SSAOSamples   = 16;
+
     bool  MotionBlurEnabled  = false;
     float MotionBlurStrength = 0.5f;
     int   MotionBlurSamples  = 8;
@@ -330,6 +338,17 @@ private:
                          float* splits,
                          glm::mat4* outMatrices);
     std::unique_ptr<Shader> m_ForwardShader;
+        std::unique_ptr<Shader>      m_SSAOShader;
+    std::unique_ptr<Shader>      m_SSAOBlurShader;
+    std::unique_ptr<Framebuffer> m_SSAOFBO;
+    std::unique_ptr<Framebuffer> m_SSAOBlurFBO;
+    bool                         m_HasSSAO = false;
+    std::array<glm::vec3, 32>    m_SSAOKernel{};
+        void GenerateSSAOKernel();
+    void EnsureSSAOTargets(uint32_t width, uint32_t height);
+    void SSAOPass(const glm::mat4& viewMatrix,
+                  const glm::mat4& projectionMatrix,
+                  const PostProcessSettings& post);
 };
 
 }

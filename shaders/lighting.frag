@@ -8,6 +8,9 @@ uniform sampler2D u_NormalTexture;
 uniform sampler2D u_AlbedoTexture;
 uniform sampler2D u_MaterialTexture;
 uniform sampler2D u_OutlineTexture;
+uniform sampler2D u_SSAOTexture;
+uniform int       u_HasSSAO;
+uniform float     u_SSAOIntensity;
 uniform int       u_HasOutline;
 
 uniform vec3  u_CameraPosition;
@@ -345,6 +348,57 @@ float SamplePointShadow(int lightIdx, vec3 worldPos, vec3 N, vec3 L)
 }
 
 // ============================================================================
+// SSAO — depth-aware bilinear upsample from half-res texture
+// ============================================================================
+float SampleSSAO_DepthAware(vec2 uv, float centerViewZ)
+{
+    vec2 ssaoSize = vec2(textureSize(u_SSAOTexture, 0));
+    vec2 texel    = 1.0 / ssaoSize;
+
+    vec2 scaledUV = uv * ssaoSize - 0.5;
+    vec2 baseUV   = (floor(scaledUV) + 0.5) / ssaoSize;
+    vec2 fracUV   = fract(scaledUV);
+
+    vec2 uvs[4] = vec2[4](
+        baseUV,
+        baseUV + vec2(texel.x, 0.0),
+        baseUV + vec2(0.0, texel.y),
+        baseUV + texel
+    );
+
+    float bilinW[4] = float[4](
+        (1.0 - fracUV.x) * (1.0 - fracUV.y),
+        fracUV.x * (1.0 - fracUV.y),
+        (1.0 - fracUV.x) * fracUV.y,
+        fracUV.x * fracUV.y
+    );
+
+    float result = 0.0;
+    float totalW = 0.0;
+
+    for (int i = 0; i < 4; ++i)
+    {
+        // Полное разрешение position — чтобы знать view-space Z источника
+        vec3  sampleWorld = texture(u_PositionTexture, uvs[i]).rgb;
+        float sampleViewZ = -(u_ViewMatrix * vec4(sampleWorld, 1.0)).z;
+
+        float depthDiff = abs(centerViewZ - sampleViewZ);
+
+        // Сильное падение на разнице глубин — режем края
+        float depthW = exp(-depthDiff * depthDiff * 100.0);
+
+        float w = bilinW[i] * depthW;
+        result += texture(u_SSAOTexture, uvs[i]).r * w;
+        totalW += w;
+    }
+
+    if (totalW < 1e-5)
+        return texture(u_SSAOTexture, uv).r;   // fallback — все углы "далеко"
+
+    return result / totalW;
+}
+
+// ============================================================================
 // main
 // ============================================================================
 void main()
@@ -453,6 +507,14 @@ void main()
     }
 
     // Ambient
+    // ---- SSAO factor ----------------------------------------------------
+    float ssaoFactor = 1.0;
+    if (u_HasSSAO == 1)
+    {
+        float rawAO  = texture(u_SSAOTexture, v_UV).r;
+        ssaoFactor   = mix(1.0, rawAO, clamp(u_SSAOIntensity, 0.0, 3.0));
+    }
+
     vec3 skyColor    = vec3(0.35, 0.42, 0.55);
     vec3 groundColor = vec3(0.12, 0.10, 0.08);
     float hemi       = N.y * 0.5 + 0.5;
@@ -467,13 +529,18 @@ void main()
         {
             vec3 R    = reflect(-V, N);
             vec3 skyR = SampleSkybox(R);
+
             vec3 reflTint = mix(vec3(1.0), albedo, metallic);
+
             float NdotV   = max(dot(N, V), 1e-4);
             float graze   = pow(1.0 - NdotV, 5.0);
             float fresnel = mix(1.0, 1.6, graze);
+
             ambient += skyR * reflTint * fresnel * skyReflStrength * ao;
         }
     }
+
+    ambient *= ssaoFactor;
 
     vec3 color = ambient + Lo + albedo * emissive;
 
