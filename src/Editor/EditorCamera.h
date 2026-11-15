@@ -65,6 +65,7 @@ private:
     bool  m_MouseOver  = false;
     bool  m_GizmoActive = false;
     bool  m_WasRightPressed = false;
+    bool  m_JustCaptured    = false;   // ← FIX #9
 
     void UpdateMatrices();
     void RebuildOrientation();

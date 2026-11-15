@@ -652,10 +652,12 @@ int main()
 
             Binax::TransformSystem::UpdateWorldTransforms(registry);
 
-            // ---- Build frame data (один раз!) --------------------------------
             Binax::RenderSystem::BuildFrameData(registry, frameData);
 
-            // ---- Lights (до shadow pass!) ------------------------------------
+            // FIX #57: один upload на кадр. RenderShadowPass / BakeReflectionProbe /
+            // GeometryPass теперь используют уже загруженный SSBO.
+            Binax::InstanceBuffer::Get().Upload(frameData.Instances);
+
             collectedLights.clear();
             Binax::RenderSystem::CollectLights(registry, collectedLights);
 

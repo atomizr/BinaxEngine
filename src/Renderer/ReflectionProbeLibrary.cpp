@@ -17,6 +17,7 @@ ReflectionProbeLibrary& ReflectionProbeLibrary::Get()
 void ReflectionProbeLibrary::RecreateArray(uint32_t resolution, uint32_t count)
 {
     count = std::min<uint32_t>(count, kMaxProbes);
+    resolution = std::clamp<uint32_t>(resolution, 16u, 4096u);   // ← FIX #10
 
     const uint32_t oldCount      = m_Count;
     const uint32_t oldResolution = m_Resolution;
@@ -243,6 +244,26 @@ bool ReflectionProbeLibrary::LoadFromFile(const std::string& path)
     {
         BINAX_LOG_ERROR("ReflectionProbeLibrary::LoadFromFile: invalid params "
                         "res={} count={}", resolution, count);
+        return false;
+    }
+
+    // FIX #10: защита от переполнения uint32_t и неадекватных размеров.
+    // pixels = res * res * 6 * count должен влезть в uint32_t и в память.
+    constexpr uint32_t kMaxResolution = 4096;   // 4K кубемап — разумный потолок
+    if (resolution > kMaxResolution)
+    {
+        BINAX_LOG_ERROR("ReflectionProbeLibrary::LoadFromFile: resolution {} "
+                        "exceeds safe maximum {} in '{}'",
+                        resolution, kMaxResolution, path);
+        return false;
+    }
+
+    const uint64_t pixels64 =
+        static_cast<uint64_t>(resolution) * resolution * 6ull * count;
+    if (pixels64 == 0 || pixels64 > (1ull << 28))   // 268M пикселей ≈ 2 GB в half
+    {
+        BINAX_LOG_ERROR("ReflectionProbeLibrary::LoadFromFile: suspicious pixel "
+                        "count {} in '{}'", pixels64, path);
         return false;
     }
 

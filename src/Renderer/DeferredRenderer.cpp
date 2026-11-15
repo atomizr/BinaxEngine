@@ -380,7 +380,7 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
     if (frame.Draws.empty()) return;
 
     MaterialLibrary::Get().Flush();
-    InstanceBuffer::Get().Upload(frame.Instances);
+    // FIX #57: instances уже загружены main.cpp.
 
     const uint32_t groupCount = (uint32_t)frame.Draws.size();   
     const bool gpuCull = m_FrustumCullingEnabled && m_CullShader != nullptr &&
@@ -836,10 +836,6 @@ void DeferredRenderer::RenderShadowPass(
 
     if (directionalIdx < 0 && spotIdxs.empty() && pointIdxs.empty())
         return;
-
-    // ---- Upload instances + MDI -------------------------------------------
-    InstanceBuffer::Get().Upload(frame.Instances);
-
     EnsureShadowDrawBuffers((uint32_t)frame.Draws.size());
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_ShadowIndirectSSBO);
     glBufferSubData(GL_DRAW_INDIRECT_BUFFER, 0,
@@ -1517,8 +1513,7 @@ void DeferredRenderer::BakeReflectionProbe(
                    probeExtents.x, probeExtents.y, probeExtents.z,
                    frame.Instances.size(), reflectSkybox);
 
-    // Upload instances + material SSBO (opaque only — transparent не нужны)
-    InstanceBuffer::Get().Upload(frame.Instances);
+    // FIX #57: instances уже загружены main.cpp.
     MaterialLibrary::Get().Flush();
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, InstanceBuffer::Get().GetSSBO());

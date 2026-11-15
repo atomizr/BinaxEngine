@@ -374,6 +374,20 @@ void EditorUI::SetParent(entt::entity child, entt::entity parent)
         }
     }
 
+    // FIX #6: сохраняем старое состояние для отката
+    const bool         hadParent = m_Registry.any_of<ParentComponent>(child);
+    const entt::entity oldParent = hadParent
+        ? m_Registry.get<ParentComponent>(child).Parent
+        : entt::null;
+
+    auto rollback = [&]()
+    {
+        if (hadParent)
+            m_Registry.get_or_emplace<ParentComponent>(child).Parent = oldParent;
+        else
+            m_Registry.remove<ParentComponent>(child);
+    };
+
     const glm::mat4 worldBefore = TransformSystem::GetWorldMatrix(m_Registry, child);
 
     if (parent == entt::null)
@@ -391,11 +405,20 @@ void EditorUI::SetParent(entt::entity child, entt::entity parent)
     glm::vec4 perspective;
     glm::quat rotation;
     if (!glm::decompose(local, scale, rotation, translation, skew, perspective))
+    {
+        // FIX #6: откат, чтобы не оставить объект в противоречивом состоянии
+        rollback();
+        BINAX_LOG_WARN("Reparent failed: matrix decompose failed, rolled back");
         return;
+    }
 
     if (!std::isfinite(translation.x) || !std::isfinite(translation.y) ||
         !std::isfinite(translation.z))
+    {
+        rollback();
+        BINAX_LOG_WARN("Reparent failed: non-finite translation, rolled back");
         return;
+    }
 
     auto clampScale = [](float s)
     {
@@ -1916,8 +1939,7 @@ void EditorUI::DrawShadowSettingsWindow()
             Notify(ImGuiToastType_Info, 2000, "Shadow settings reset");
         }
 
-        // Автосохранение на любое изменение (тихо, без toast-спама)
-        if (changed)
+        if (changed && !ImGui::IsAnyItemActive())
             ShadowSettingsSerializer::Save(s, Paths::Resolve(AssetFiles::kShadowsFile));
     }
     ImGui::End();
@@ -2837,7 +2859,9 @@ void EditorUI::DuplicateEntity(entt::entity entity)
         if (m_Registry.any_of<Transform>(rootIt->second))
             m_Registry.get<Transform>(rootIt->second).Position += glm::vec3(1.5f, 0.0f, 0.0f);
 
-        m_SelectedEntity = rootIt->second;
+        // FIX #19: SelectOnly синхронизирует m_SelectedEntity и m_SelectedEntities,
+        // иначе гизмо двигает дубликат, а outline подсвечивает оригинал.
+        SelectOnly(rootIt->second);
     }
 
     BINAX_LOG_INFO("Duplicated '{0}' with {1} entities",
