@@ -642,6 +642,11 @@ int main()
             editorUI.SetCameraMatrices(editorCamera.GetViewMatrix(),
                                        editorCamera.GetProjectionMatrix());
 
+            // FIX #5: если редактор телепортировал камеру (focus / load / undo),
+            // инвалидируем TAA-историю, чтобы не было «фантомов».
+            if (editorUI.ConsumeCameraTeleported())
+                renderer.ResetTAAHistory();
+
             renderer.SetTAAEnabled(frameTAA.Enabled);
             renderer.ClearGBuffer();
 

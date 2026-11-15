@@ -1,8 +1,8 @@
 #version 460 core
 #extension GL_ARB_bindless_texture : require
 
-layout(location = 0) out vec4  g_Position;   // rgb=worldPos, a=probeIndex
-layout(location = 1) out vec4  g_NormalA;   // rgb=normal, a=unlitFlag
+layout(location = 0) out vec4  g_Position;   
+layout(location = 1) out vec4  g_NormalA;   
 layout(location = 2) out vec4  g_Albedo_AO;
 layout(location = 3) out vec4  g_Material;
 layout(location = 4) out vec2  g_Velocity;
@@ -30,7 +30,7 @@ layout(std430, binding = 1) readonly buffer Instances {
 struct MaterialGPU {
     vec4  AlbedoRoughness;
     vec4  MetallicAOEms;
-    vec4  SkyReflParams;    // z = ShaderType (0=Lit,1=SimpleLit,2=Unlit)
+    vec4  SkyReflParams;    
     vec4  StrengthA;
     uvec2 AlbedoHandle;
     uvec2 NormalHandle;
@@ -82,8 +82,8 @@ void main()
     vec3 albedoTint = sRGBToLinear(m.AlbedoRoughness.rgb);
     vec3 baseColor  = albedoTint;
 
-    // ---- Alpha computation --------------------------------------------
-    float alpha = m.SkyReflParams.w;   // AlphaMultiplier (default 1.0)
+    
+    float alpha = m.SkyReflParams.w;   
     if (m.AlbedoHandle != kNoHandle)
     {
         vec4 albedoTex = texture(sampler2D(m.AlbedoHandle), uv);
@@ -93,17 +93,17 @@ void main()
 
     const int blendMode = int(m.StrengthB.w + 0.5);
 
-    // Transparent — сюда не рисуем, уйдёт в forward pass
+    
     if (blendMode == 2)
         discard;
 
-    // AlphaTest — foliage, заборы, решётки
+    
     if (blendMode == 1 && alpha < m.StrengthB.z)
         discard;
 
     vec3 N = normalize(v_Normal);
 
-    // ===== UNLIT ==========================================================
+    
     if (shaderType == 2)
     {
         float emissive = m.MetallicAOEms.z;
@@ -118,8 +118,8 @@ void main()
         return;
     }
 
-    // ===== LIT / SIMPLE LIT ==============================================
-    // Simple Lit отключает PBR-карты и IBL, но оставляет normal-map.
+    
+    
     const bool simpleLit = (shaderType == 1);
 
     if (m.NormalHandle != kNoHandle)
@@ -159,7 +159,7 @@ void main()
         : -1.0;
 
     g_Position  = vec4(v_WorldPos, float(inst.Flags >> 16));
-    g_NormalA   = vec4(N, 0.0);                        // a=0 → lit
+    g_NormalA   = vec4(N, 0.0);                        
     g_Albedo_AO = vec4(baseColor, ao);
     g_Material  = vec4(metallic, roughness, emissive, skyReflPacked);
     g_Velocity  = v_Velocity;

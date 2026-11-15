@@ -50,7 +50,7 @@ void main()
 
     vec3 normal = normalize(mat3(u_View) * worldNormal);
 
-    // ---- Per-pixel random rotation around normal -----------------------
+    
     float angle = Hash(v_UV * 1024.0) * 2.0 * PI;
 
     vec3 baseTangent = (abs(normal.y) < 0.99)
@@ -65,7 +65,7 @@ void main()
 
     mat3 TBN = mat3(tangent, bitangent, normal);
 
-    // ---- SSAO sampling -------------------------------------------------
+    
     float occlusion = 0.0;
     int samples = min(u_Samples, 32);
 
@@ -83,8 +83,8 @@ void main()
         float sampleDepthRaw = texture(u_DepthTexture, sampleUV).r;
         vec3  sampleDepthPos = ReconstructViewPos(sampleUV, sampleDepthRaw);
 
-        // Occluded, если в этой точке сцены поверхность ближе к камере,
-        // чем наш пробник
+        
+        
         if (sampleDepthPos.z > sampleViewPos.z + u_Bias)
         {
             float rangeCheck = smoothstep(

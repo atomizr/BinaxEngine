@@ -135,7 +135,7 @@ void main()
 
     vec2 uv = v_UV * m.MetallicAOEms.w;
 
-    // ---- Albedo -------------------------------------------------------
+    
     vec3 albedo = sRGBToLinear(m.AlbedoRoughness.rgb);
     float alpha = m.SkyReflParams.w;
     if (m.AlbedoHandle != kNoHandle)
@@ -145,16 +145,16 @@ void main()
         alpha  *= tex.a;
     }
 
-    // ---- Normal -------------------------------------------------------
+    
     vec3 N = normalize(v_Normal);
-    // (normal-map без TBN — упрощение; для стекла/дыма это OK)
+    
 
     vec3  V = normalize(u_CameraPosition - v_WorldPos);
     float metallic  = m.MetallicAOEms.x;
     float roughness = clamp(m.AlbedoRoughness.w, 0.04, 1.0);
     float emissive  = m.MetallicAOEms.z;
 
-    // ---- Direct lighting ---------------------------------------------
+    
     vec3 Lo = vec3(0.0);
     for (int i = 0; i < u_LightCount; ++i)
     {
@@ -188,7 +188,7 @@ void main()
         Lo += EvaluateBRDF(N, V, L, radiance, albedo, metallic, roughness);
     }
 
-    // ---- Ambient / IBL -----------------------------------------------
+    
     vec3 ambient = vec3(0.35, 0.42, 0.55) * albedo * 0.3;
     if (u_HasEnvironment == 1)
     {

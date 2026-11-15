@@ -5,8 +5,8 @@ out vec4 FragColor;
 
 uniform sampler2D u_AOTexture;
 uniform sampler2D u_DepthTexture;
-uniform vec2      u_TexelSize;      // 1/halfW, 1/halfH
-uniform vec2      u_BlurAxis;       // (1,0) — H pass, (0,1) — V pass
+uniform vec2      u_TexelSize;      
+uniform vec2      u_BlurAxis;       
 uniform float     u_NearPlane;
 uniform float     u_FarPlane;
 
@@ -34,8 +34,8 @@ void main()
         float sampleZ = LinearizeDepth(texture(u_DepthTexture, suv).r);
         float ao      = texture(u_AOTexture, suv).r;
 
-        // Bilateral — сохраняем края объектов.
-        // Вес падает с квадратом разницы в линейной глубине (в метрах).
+        
+        
         float diff = abs(centerZ - sampleZ);
         float w    = exp(-diff * diff * 100.0);
 

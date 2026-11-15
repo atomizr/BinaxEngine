@@ -5,6 +5,6 @@ uniform float u_Far;
 
 void main()
 {
-    // Depth-only; линейную дистанцию восстанавливаем в lighting.frag
-    // через LinearizeDepth() по near/far.
+    
+    
 }

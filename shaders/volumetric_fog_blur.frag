@@ -5,7 +5,7 @@ out vec4 FragColor;
 
 uniform sampler2D u_Texture;
 uniform vec2      u_TexelSize;
-uniform vec2      u_Direction;   // (1,0) H pass, (0,1) V pass
+uniform vec2      u_Direction;   
 
 void main()
 {

@@ -44,9 +44,10 @@ struct FrameRenderData
     std::vector<ReflectionProbeEntry> ReflectionProbes;
     struct TransparentInstance
     {
-        entt::entity Entity       = entt::null;
+        entt::entity Entity = entt::null;
         InstanceGPU  GPU{};
-        float        DistanceSq   = 0.0f;
+        // NOTE: расстояние до камеры здесь не храним — сортировка
+        // делается в ForwardTransparentPass по актуальной cameraPosition.
     };
     std::vector<TransparentInstance> TransparentInstances;
 };
@@ -178,8 +179,6 @@ public:
                 FrameRenderData::TransparentInstance ti;
                 ti.Entity = e;
                 ti.GPU    = g;
-                const glm::vec3 worldPos(model[3]);
-                ti.DistanceSq = glm::dot(worldPos, worldPos);
                 out.TransparentInstances.push_back(ti);
                 continue;
             }
@@ -236,51 +235,66 @@ public:
         }
     }
 
-    static void CollectLights(entt::registry& registry, std::vector<GPULight>& out)
+static void CollectLights(entt::registry& registry, std::vector<GPULight>& out)
+{
+    out.clear();
+    out.reserve(kMaxLights);
+
+    auto view = registry.view<Transform, LightComponent>();
+    for (auto entity : view)
     {
-        out.clear();
-        out.reserve(kMaxLights);
+        if (registry.any_of<EntityFlags>(entity) &&
+            !registry.get<EntityFlags>(entity).Enabled)
+            continue;
 
-        auto view = registry.view<Transform, LightComponent>();
-        for (auto entity : view)
+        if ((int)out.size() >= kMaxLights) break;
+
+        const auto& tr = view.get<Transform>(entity);
+        const auto& lc = view.get<LightComponent>(entity);
+
+        // Свет должен светить из world-space. Предпочитаем кэш WorldTransform
+        // (заполняется TransformSystem::UpdateWorldTransforms), с fallback
+        // на локальный Transform — на случай 1-го кадра после создания.
+        const glm::mat4 world = [&]() -> glm::mat4
         {
-            if (registry.any_of<EntityFlags>(entity) &&
-                !registry.get<EntityFlags>(entity).Enabled)
-                continue;
+            if (const auto* wt = registry.try_get<WorldTransform>(entity))
+                return wt->Matrix;
+            return tr.GetModelMatrix();
+        }();
 
-            if ((int)out.size() >= kMaxLights) break;
+        const glm::vec3 worldPos(world[3]);
 
-            const auto& tr = view.get<Transform>(entity);
-            const auto& lc = view.get<LightComponent>(entity);
+        // Direction: (0,0,-1) под world-матрицей. w=0 → без трансляции.
+        // Нормализуем, чтобы отбросить масштаб родителя.
+        glm::vec3 worldDir = glm::vec3(world * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+        const float dirLen2 = glm::dot(worldDir, worldDir);
+        if (dirLen2 > 1e-8f)
+            worldDir = glm::normalize(worldDir);
+        else
+            worldDir = glm::vec3(0.0f, 0.0f, -1.0f);
 
-            GPULight gpu;
-            gpu.Position    = tr.Position;
-            gpu.Range       = lc.Range;
-            gpu.Color       = lc.Color;
-            gpu.Intensity   = lc.Intensity;
-            gpu.InnerCutoff = lc.InnerCutoff;
-            gpu.OuterCutoff = lc.OuterCutoff;
-            gpu.Direction   = tr.Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
-            gpu.ShadowMode     = static_cast<int>(lc.ShadowMode);
-            gpu.ShadowStrength = lc.ShadowStrength;
-            gpu.BiasMultiplier = lc.BiasMultiplier;
+        GPULight gpu;
+        gpu.Position    = worldPos;
+        gpu.Range       = lc.Range;
+        gpu.Color       = lc.Color;
+        gpu.Intensity   = lc.Intensity;
+        gpu.InnerCutoff = lc.InnerCutoff;
+        gpu.OuterCutoff = lc.OuterCutoff;
+        gpu.Direction   = worldDir;
+        gpu.ShadowMode     = static_cast<int>(lc.ShadowMode);
+        gpu.ShadowStrength = lc.ShadowStrength;
+        gpu.BiasMultiplier = lc.BiasMultiplier;
 
-            switch (lc.Type)
-            {
-                case LightType::Directional: gpu.LightType = GPULight::Directional; break;
-                case LightType::Point:       gpu.LightType = GPULight::Point;       break;
-                case LightType::Spot:        gpu.LightType = GPULight::Spot;        break;
-            }
-
-            out.push_back(gpu);
+        switch (lc.Type)
+        {
+            case LightType::Directional: gpu.LightType = GPULight::Directional; break;
+            case LightType::Point:       gpu.LightType = GPULight::Point;       break;
+            case LightType::Spot:        gpu.LightType = GPULight::Spot;        break;
         }
+
+        out.push_back(gpu);
     }
-
-
-
-
-
-
+}
 
     static entt::entity PickEntityAtUV(const FrameRenderData& frame,
                                        const GBuffer& gbuffer,

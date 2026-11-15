@@ -57,13 +57,13 @@ layout(std430, binding = 8) readonly buffer GroupTemplates {
 uniform vec4 u_Frustum[6];
 uniform uint u_GroupCount;
 uniform uint u_MaxDraws;
-uniform uint u_MeshCount;   // NEW: количество валидных мешей (для OOB-защиты)
+uniform uint u_MeshCount;   
 
 const uint kInstanceFlagSkinned = 1u;
 
 shared uint s_anyVisible;
 shared uint s_visibleCount;
-shared uint s_meshIndex;       // NEW: индекс меша группы (читаем один раз)
+shared uint s_meshIndex;       
 
 void main()
 {
@@ -80,12 +80,12 @@ void main()
     const uint lane   = gl_LocalInvocationID.x;
     const uint stride = gl_WorkGroupSize.x;
 
-    // Читаем MeshId группы один раз — все инстансы в группе имеют один MeshId
+    
     const uint meshIdx = instances[base].MeshId;
 
-    // Защита от OOB: если MeshId невалиден — группу целиком скипаем.
-    // Это защищает и от гонки: MeshLibrary мог обновиться асинхронно,
-    // и CPU-валидация в BuildFrameData уже неактуальна.
+    
+    
+    
     if (meshIdx >= u_MeshCount)
         return;
 

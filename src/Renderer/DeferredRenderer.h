@@ -165,7 +165,16 @@ public:
     bool IsFrustumCullingEnabled() const { return m_FrustumCullingEnabled; }
     bool IsFrustumCullingAvailable() const { return m_CullShader != nullptr; }
 
-    void ResetTAAHistory() { m_TAAHistoryValid = false; m_TaaFrameIndex = 0; }
+        void ResetTAAHistory()
+    {
+        // FIX #5: сброс всей TAA-цепочки, включая PrevViewProj и PrevJitter.
+        // Без сброса m_HasPrevViewProj velocity-буфер даёт огромные значения
+        // (телепорт), что ведёт к motion blur / TAA «шлейфу» на 1–2 кадра.
+        m_TAAHistoryValid = false;
+        m_HasPrevViewProj = false;
+        m_PrevJitter      = glm::vec2(0.0f);
+        m_TaaFrameIndex   = 0;
+    }
 
     void SetTAAEnabled(bool enabled)
     {

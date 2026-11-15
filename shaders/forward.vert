@@ -27,7 +27,7 @@ layout(std430, binding = 3) readonly buffer Bones {
 
 uniform mat4 u_View;
 uniform mat4 u_Projection;
-uniform uint u_InstanceIndex;   // передаём явно — MDI не используем
+uniform uint u_InstanceIndex;   
 
 out vec3 v_WorldPos;
 out vec3 v_Normal;

@@ -28,7 +28,7 @@ uniform float u_FogDistance;
 uniform int   u_FogSteps;
 uniform float u_Scattering;
 
-// ---- Noise ---------------------------------------------------------------
+
 uniform int   u_NoiseEnabled;
 uniform float u_NoiseSpeed;
 uniform float u_NoiseScale;
@@ -74,9 +74,9 @@ float HG(float cosTheta, float g)
     return (1.0 - g2) / (4.0 * PI * pow(denom, 1.5));
 }
 
-// ============================================================================
-// 3D value noise + 2 octave FBM
-// ============================================================================
+
+
+
 float hash31(vec3 p)
 {
     p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
@@ -114,7 +114,7 @@ float fbm2(vec3 p)
 {
     float sum  = 0.5  * noise3D(p);
     sum       += 0.25 * noise3D(p * 2.0);
-    return sum / 0.75;   // нормируем к [0, 1]
+    return sum / 0.75;   
 }
 
 void main()
@@ -139,7 +139,7 @@ void main()
 
     vec3 accum = vec3(0.0);
 
-    // Scroll по XZ — горизонтальный ветер
+    
     vec3 scrollOffset = vec3(u_Time * u_NoiseSpeed, 0.0, u_Time * u_NoiseSpeed * 0.7);
 
     for (int i = 0; i < steps; ++i)
@@ -156,13 +156,13 @@ void main()
 
         float shadow = SampleShadowCSM(p, t);
 
-        // ---- Noise (движущийся "дым") ---------------------------------
+        
         float noiseFactor = 1.0;
         if (u_NoiseEnabled == 1)
         {
             vec3  noisePos = p * u_NoiseScale + scrollOffset;
-            float n        = fbm2(noisePos);                       // [0, 1]
-            noiseFactor    = mix(1.0, n * 2.0, u_NoiseIntensity);  // [0, 2]
+            float n        = fbm2(noisePos);                       
+            noiseFactor    = mix(1.0, n * 2.0, u_NoiseIntensity);  
         }
 
         float density = u_FogDensity * heightMask * noiseFactor;

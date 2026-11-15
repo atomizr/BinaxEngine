@@ -13,7 +13,7 @@ uniform int       u_HasSSAO;
 uniform float     u_SSAOIntensity;
 uniform int       u_HasOutline;
 
-// ---- Reflection probes ------------------------------------------------
+
 const int MAX_PROBES = 4;
 uniform samplerCubeArray u_ProbeCubeArray;
 uniform int   u_ProbeCount;
@@ -21,7 +21,7 @@ uniform vec3  u_ProbePos[MAX_PROBES];
 uniform vec3  u_ProbeExtents[MAX_PROBES];
 uniform int   u_ProbeBoxProjection[MAX_PROBES];
 
-// ---- Debug (0=off, 1=probeIdx, 2=raw probe, 3=reflection contribution) ----
+
 uniform int u_DebugReflections;
 
 uniform vec3  u_CameraPosition;
@@ -39,7 +39,7 @@ uniform float u_FogDensity;
 uniform float u_FogStart;
 uniform float u_FogEnd;
 
-// ---- Shadows: Directional (CSM) ----------------------------------------
+
 uniform sampler2DArray u_ShadowMap;
 uniform mat4  u_LightSpaceMatrices[4];
 uniform float u_CascadeSplits[4];
@@ -55,11 +55,11 @@ uniform float u_ShadowStrength;
 uniform float u_BiasMultiplier;
 uniform mat4  u_ViewMatrix;
 
-// ---- Shadows: Spot -----------------------------------------------------
+
 uniform sampler2DArray u_SpotShadowMap;
 uniform mat4           u_SpotLightSpaceMatrix[4];
 
-// ---- Shadows: Point ----------------------------------------------------
+
 uniform samplerCubeArray u_PointShadowMap;
 uniform float            u_PointShadowNear[2];
 uniform float            u_PointShadowFar [2];
@@ -84,9 +84,9 @@ uniform int   u_LightCount;
 
 const float PI = 3.14159265359;
 
-// ============================================================================
-// Outline
-// ============================================================================
+
+
+
 vec3 OutlineComposite(vec3 baseColor, vec2 uv)
 {
     if (u_HasOutline != 1) return baseColor;
@@ -111,9 +111,9 @@ vec3 OutlineComposite(vec3 baseColor, vec2 uv)
     return vec3(0.36, 0.56, 1.0);
 }
 
-// ============================================================================
-// BRDF
-// ============================================================================
+
+
+
 float D_GGX(float NdotH, float roughness)
 {
     float a  = roughness * roughness;
@@ -182,9 +182,9 @@ vec3 SampleSkybox(vec3 dir)
     return texture(u_EnvironmentMap, rotated).rgb * u_SkyboxBrightness;
 }
 
-// ============================================================================
-// Directional (CSM) shadow
-// ============================================================================
+
+
+
 float SampleDirectionalShadow(vec3 worldPos, vec3 N, vec3 L, float viewZ)
 {
     if (u_ShadowMode == 0 || u_CascadeCount == 0) return 1.0;
@@ -243,9 +243,9 @@ float SampleDirectionalShadow(vec3 worldPos, vec3 N, vec3 L, float viewZ)
     return mix(1.0, shadow, u_ShadowStrength);
 }
 
-// ============================================================================
-// Spot shadow
-// ============================================================================
+
+
+
 float SampleSpotShadow(int lightIdx, vec3 worldPos, vec3 N, vec3 L)
 {
     int slot = u_Lights[lightIdx].ShadowSlot;
@@ -292,9 +292,9 @@ float SampleSpotShadow(int lightIdx, vec3 worldPos, vec3 N, vec3 L)
     return mix(1.0, shadow, u_Lights[lightIdx].ShadowStrength);
 }
 
-// ============================================================================
-// Point shadow
-// ============================================================================
+
+
+
 float LinearizeDepth(float d, float nearP, float farP)
 {
     float z = d * 2.0 - 1.0;
@@ -357,9 +357,9 @@ float SamplePointShadow(int lightIdx, vec3 worldPos, vec3 N, vec3 L)
     return mix(1.0, shadow, u_Lights[lightIdx].ShadowStrength);
 }
 
-// ============================================================================
-// SSAO — depth-aware bilinear upsample from half-res texture
-// ============================================================================
+
+
+
 float SampleSSAO_DepthAware(vec2 uv, float centerViewZ)
 {
     vec2 ssaoSize = vec2(textureSize(u_SSAOTexture, 0));
@@ -405,9 +405,9 @@ float SampleSSAO_DepthAware(vec2 uv, float centerViewZ)
     return result / totalW;
 }
 
-// ============================================================================
-// Reflection probe sampling — правильная box projection + защита
-// ============================================================================
+
+
+
 bool IsValidProbe(uint pIdx)
 {
     return u_ProbeCount > 0 && pIdx < uint(u_ProbeCount);
@@ -422,11 +422,11 @@ vec3 SampleReflectionProbe(uint pIdx, vec3 worldPos, vec3 R, float roughness)
 
     if (u_ProbeBoxProjection[pIdx] != 0)
     {
-        // Вектор от пробы к пикселю
+        
         vec3 originToWorld = worldPos - pPos;
 
-        // Если пиксель внутри box — делаем параллакс-коррекцию.
-        // Снаружи box — используем R напрямую (нет валидной box-проекции).
+        
+        
         if (all(lessThanEqual(abs(originToWorld), pExt)))
         {
             vec3 t1   = (pExt - originToWorld) / R;
@@ -434,7 +434,7 @@ vec3 SampleReflectionProbe(uint pIdx, vec3 worldPos, vec3 R, float roughness)
             vec3 tmax = max(t1, t2);
             float dist = min(min(tmax.x, tmax.y), tmax.z);
 
-            // Защита от inf / nan (R мог быть 0 по какой-то оси)
+            
             if (dist > 1e-4 && !isinf(dist) && !isnan(dist))
             {
                 vec3 hitPos = worldPos + R * dist;
@@ -443,7 +443,7 @@ vec3 SampleReflectionProbe(uint pIdx, vec3 worldPos, vec3 R, float roughness)
         }
     }
 
-    // Защита от degenerate reflDir (если box projection выродился)
+    
     float len2 = dot(reflDir, reflDir);
     if (len2 < 1e-6)
         reflDir = R;
@@ -454,9 +454,9 @@ vec3 SampleReflectionProbe(uint pIdx, vec3 worldPos, vec3 R, float roughness)
     return textureLod(u_ProbeCubeArray, vec4(reflDir, float(pIdx)), lod).rgb;
 }
 
-// ============================================================================
-// main
-// ============================================================================
+
+
+
 void main()
 {
     vec4  posA     = texture(u_PositionTexture, v_UV);
@@ -478,7 +478,7 @@ void main()
     bool  skyReflEnabled  = mat.a >= 0.0;
     float skyReflStrength = max(mat.a, 0.0);
 
-    // ---- Debug: probeIdx -------------------------------------------------
+    
     if (u_DebugReflections == 1)
     {
         FragColor = (probeIdx > 0u) ? vec4(0.0, 1.0, 0.0, 1.0)
@@ -486,7 +486,7 @@ void main()
         return;
     }
 
-    // ---- Debug: raw probe sample (без материала и освещения) -------------
+    
     if (u_DebugReflections == 2 && probeIdx > 0u && IsValidProbe(probeIdx - 1u))
     {
         if (dot(Nraw, Nraw) > 1e-4)
@@ -500,7 +500,7 @@ void main()
         }
     }
 
-    // Unlit
+    
     if (isUnlit)
     {
         vec3 color = albedo * (1.0 + emissive);
@@ -509,7 +509,7 @@ void main()
         return;
     }
 
-    // Sky
+    
     if (dot(Nraw, Nraw) < 1e-4)
     {
         vec3 color = vec3(0.0);
@@ -586,7 +586,7 @@ void main()
               * lightShadow;
     }
 
-    // ---- SSAO factor ----------------------------------------------------
+    
     float ssaoFactor = 1.0;
     if (u_HasSSAO == 1)
     {
@@ -594,7 +594,7 @@ void main()
         ssaoFactor   = mix(1.0, rawAO, clamp(u_SSAOIntensity, 0.0, 3.0));
     }
 
-    // ---- Ambient (hemisphere) -------------------------------------------
+    
     vec3 skyColor    = vec3(0.35, 0.42, 0.55);
     vec3 groundColor = vec3(0.12, 0.10, 0.08);
     float hemi       = N.y * 0.5 + 0.5;
@@ -606,7 +606,7 @@ void main()
         ambient += skyN * albedo * ao * 0.15;
     }
 
-    // ---- Reflections (IBL + probe) --------------------------------------
+    
     vec3 specContrib = vec3(0.0);
     if (skyReflEnabled)
     {
@@ -614,14 +614,14 @@ void main()
         vec3 reflColor = vec3(0.0);
         bool gotReflection = false;
 
-        // 1) Probe — приоритет
+        
         if (probeIdx > 0u && IsValidProbe(probeIdx - 1u))
         {
             reflColor = SampleReflectionProbe(probeIdx - 1u, worldPos, R, roughness);
             gotReflection = true;
         }
 
-        // 2) Fallback — глобальный skybox
+        
         if (!gotReflection && u_HasEnvironment == 1)
         {
             reflColor = SampleSkybox(R);
@@ -639,7 +639,7 @@ void main()
 
     ambient *= ssaoFactor;
 
-    // ---- Debug: показать только вклад отражений ------------------------
+    
     if (u_DebugReflections == 3)
     {
         FragColor = vec4(specContrib, 1.0);
@@ -648,7 +648,7 @@ void main()
 
     vec3 color = ambient + Lo + albedo * emissive;
 
-    // ---- Fog ------------------------------------------------------------
+    
     if (u_FogEnabled == 1)
     {
         const float dist = length(u_CameraPosition - worldPos);

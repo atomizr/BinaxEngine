@@ -73,6 +73,12 @@ public:
         m_PendingSaveProbes = false;
         return v;
     }
+        bool ConsumeCameraTeleported()
+    {
+        const bool v = m_CameraTeleported;
+        m_CameraTeleported = false;
+        return v;
+    }
 
 private:
     entt::registry& m_Registry;
@@ -159,7 +165,6 @@ private:
 
     // ---- Import dialog ------------------------------------------------------
     enum class ImportScaleMode { AutoFit, Original, Custom };
-
     struct PendingImportState
     {
         bool            Active   = false;
@@ -175,19 +180,20 @@ private:
         bool FlipUV_V    = false;
         bool FlipNormals = false;
     } m_PendingImport;
-
     void DrawImportDialog();
     void ExecutePendingImport();
     void CreateEmptyEntity();
     void CreateCubeEntity();
     void CreateLightEntity(LightType type);
-
     ShadowSettings* m_ShadowSettings = nullptr;
     bool m_ShowShadowSettings = false;
     void DrawShadowSettingsWindow();
     void CreateReflectionProbeEntity();
     void DrawReflectionProbeGizmos();
     bool m_PendingSaveProbes = false;
+    bool m_CameraTeleported = false;
+    void MarkCameraTeleported() { m_CameraTeleported = true; }
+    void RebuildReflectionProbeLibrary();
 };
 
 }

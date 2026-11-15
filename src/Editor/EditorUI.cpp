@@ -220,6 +220,7 @@ void EditorUI::SaveScene()
 void EditorUI::LoadScene()
 {
     m_SelectedEntity = entt::null;
+    m_SelectedEntities.clear();          // ← FIX #2
 
     m_EditingMaterial    = kInvalidMaterial;
     m_ShowMaterialEditor = false;
@@ -273,6 +274,9 @@ void EditorUI::LoadScene()
     }
 
     BINAX_LOG_INFO("Level loaded");
+
+    RebuildReflectionProbeLibrary();      // ← FIX #3
+    MarkCameraTeleported();               // ← FIX #5 (см. ниже)
 
     ResetUndo();
     Notify(ImGuiToastType_Success, 3000, "Level loaded");
@@ -501,6 +505,36 @@ void EditorUI::HandleShortcuts()
     }
 }
 
+void EditorUI::RebuildReflectionProbeLibrary()
+{
+    // FIX #3: ProbeIndex / NeedsBake — transient, поэтому после
+    // загрузки сцены их надо пересобрать под актуальный набор probes.
+    auto& lib = ReflectionProbeLibrary::Get();
+    lib.Clear();
+
+    auto view = m_Registry.view<ReflectionProbeComponent>();
+
+    // Все probes используют общий texture-array → одна resolution.
+    // Берём resolution первой пробы (или 256 по умолчанию).
+    uint32_t firstRes = 256;
+    for (auto e : view)
+    {
+        const uint32_t r = view.get<ReflectionProbeComponent>(e).Resolution;
+        if (r > 0) { firstRes = r; break; }
+    }
+
+    for (auto e : view)
+    {
+        auto& rp = view.get<ReflectionProbeComponent>(e);
+        rp.Resolution = firstRes;
+        rp.ProbeIndex = lib.Create(firstRes);
+        rp.NeedsBake  = true;             // авто-bake на следующем кадре
+    }
+
+    BINAX_LOG_INFO("Rebuilt reflection probe library: {} probes @ {}",
+                   lib.GetCount(), lib.GetResolution());
+}
+
 void EditorUI::FocusOnSelection()
 {
     entt::entity camEntity = entt::null;
@@ -578,6 +612,8 @@ void EditorUI::FocusOnSelection()
     const float distance = radius / glm::max(glm::tan(fovRad * 0.5f), 0.01f) * 1.8f;
 
     camTransform.Position = target - forward * glm::max(distance, 0.1f);
+
+    MarkCameraTeleported();   // ← FIX #5: TAA history инвалидируется
 
     BINAX_LOG_INFO("Focus camera on '{0}'",
                    (m_SelectedEntity == entt::null)
@@ -941,14 +977,23 @@ void EditorUI::DrawLightGizmos()
             !m_Registry.get<EntityFlags>(entity).Enabled)
             continue;
 
-        // Гизмо рисуем ТОЛЬКО для выделенных светов
         const bool selected = (m_SelectedEntity == entity) ||
                               (m_SelectedEntities.count(entity) > 0);
         if (!selected)
             continue;
 
-        const auto& tr = view.get<Transform>(entity);
         const auto& lc = view.get<LightComponent>(entity);
+
+        // --- FIX #1: гизмо должно совпадать с реальным world-space светом ---
+        const glm::mat4 world = TransformSystem::GetWorldMatrix(m_Registry, entity);
+        const glm::vec3 worldPos(world[3]);
+        glm::vec3 worldFwd = glm::vec3(world * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+        const float fwdLen2 = glm::dot(worldFwd, worldFwd);
+        if (fwdLen2 > 1e-8f)
+            worldFwd = glm::normalize(worldFwd);
+        else
+            worldFwd = glm::vec3(0.0f, 0.0f, -1.0f);
+        // -------------------------------------------------------------------
 
         const ImU32 color = IM_COL32(
             int(lc.Color.x * 255.0f),
@@ -962,21 +1007,20 @@ void EditorUI::DrawLightGizmos()
             selected ? 160 : 90);
 
         ImVec2 iconPos;
-        const bool iconVisible = worldToScreen(tr.Position, iconPos);
+        const bool iconVisible = worldToScreen(worldPos, iconPos);
 
         if (lc.Type == LightType::Point)
         {
             const float r = glm::max(lc.Range, 0.01f);
-            drawCircle3D(tr.Position, r, {1,0,0}, {0,1,0}, dim, 1.0f);
-            drawCircle3D(tr.Position, r, {0,1,0}, {0,0,1}, dim, 1.0f);
-            drawCircle3D(tr.Position, r, {1,0,0}, {0,0,1}, dim, 1.0f);
+            drawCircle3D(worldPos, r, {1,0,0}, {0,1,0}, dim, 1.0f);
+            drawCircle3D(worldPos, r, {0,1,0}, {0,0,1}, dim, 1.0f);
+            drawCircle3D(worldPos, r, {1,0,0}, {0,0,1}, dim, 1.0f);
 
             if (iconVisible) drawCross(iconPos, color, 6.0f);
         }
         else if (lc.Type == LightType::Spot)
         {
-            const glm::vec3 fwd =
-                glm::normalize(tr.Rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+            const glm::vec3 fwd = worldFwd;
 
             const glm::vec3 upRef = (std::abs(fwd.y) < 0.99f)
                 ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
@@ -989,7 +1033,7 @@ void EditorUI::DrawLightGizmos()
             const float outerR   = range * std::tan(outerAng);
             const float innerR   = range * std::tan(innerAng);
 
-            const glm::vec3 baseC = tr.Position + fwd * range;
+            const glm::vec3 baseC = worldPos + fwd * range;
 
             drawCircle3D(baseC, outerR, right, up, dim, 1.0f);
             drawCircle3D(baseC, innerR, right, up, dim, 1.0f, 32);
@@ -999,20 +1043,19 @@ void EditorUI::DrawLightGizmos()
                 const float a = 0.5f * 3.14159265f * float(i);
                 const glm::vec3 edge =
                     baseC + outerR * (std::cos(a) * right + std::sin(a) * up);
-                drawPolyline({ tr.Position, edge }, dim, 1.0f);
+                drawPolyline({ worldPos, edge }, dim, 1.0f);
             }
 
-            drawPolyline({ tr.Position, baseC }, color, 1.5f);
+            drawPolyline({ worldPos, baseC }, color, 1.5f);
 
             if (iconVisible) drawCross(iconPos, color, 6.0f);
         }
-        else // Directional
+        else
         {
-            const glm::vec3 fwd =
-                glm::normalize(tr.Rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+            const glm::vec3 fwd = worldFwd;
             const float len  = 3.0f;
-            const glm::vec3 tail = tr.Position - fwd * len * 0.5f;
-            const glm::vec3 head = tr.Position + fwd * len * 0.5f;
+            const glm::vec3 tail = worldPos - fwd * len * 0.5f;
+            const glm::vec3 head = worldPos + fwd * len * 0.5f;
             drawPolyline({ tail, head }, color, 2.0f);
 
             const glm::vec3 upRef = (std::abs(fwd.y) < 0.99f)
@@ -3173,6 +3216,7 @@ void EditorUI::RestoreScene(const std::string& state)
     m_UndoSuppress = true;
 
     m_SelectedEntity      = entt::null;
+    m_SelectedEntities.clear();          // ← FIX #2
     m_PendingDelete       = entt::null;
     m_PendingDuplicate    = entt::null;
     m_GizmoWasUsing       = false;
@@ -3205,11 +3249,11 @@ void EditorUI::RestoreScene(const std::string& state)
         }
     }
 
+    RebuildReflectionProbeLibrary();      // ← FIX #3
+    MarkCameraTeleported();               // ← FIX #5 (см. ниже)
+
     m_UndoSuppress = false;
 }
-
-
-
 
 void EditorUI::SelectOnly(entt::entity e)
 {
