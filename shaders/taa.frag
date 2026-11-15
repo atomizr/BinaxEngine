@@ -105,8 +105,19 @@ void main()
     lo = min(lo, curY);
     hi = max(hi, curY);
 
-    const vec3 historyY = RGBToYCoCg(max(texture(u_HistoryTexture, prevUV).rgb,
-                                         vec3(0.0)));
+    const vec3 rawHistory = texture(u_HistoryTexture, prevUV).rgb;
+
+    // FIX #8: если в history попал NaN/Inf (bloom с нулевым порогом,
+    // деление на ноль, импорт с NaN-вершинами) — mix() увековечит его.
+    // Отравленная история живёт до перезагрузки. Проверяем history
+    // так же, как current, и при провале — пишем current без mix.
+    if (!IsFinite(rawHistory))
+    {
+        FragColor = vec4(current, 1.0);
+        return;
+    }
+
+    const vec3 historyY = RGBToYCoCg(max(rawHistory, vec3(0.0)));
     const vec3 clampedHistory = clamp(historyY, lo, hi);
 
     const float speedPx = length(vel * u_Resolution);

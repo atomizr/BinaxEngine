@@ -26,24 +26,6 @@ using namespace Reflect;
 
 namespace {
 
-
-
-
-
-
-
-
-
-std::string PathToUtf8(const std::filesystem::path& p)
-{
-    return Paths::ToUtf8(p);
-}
-
-std::filesystem::path PathFromUtf8(const std::string& s)
-{
-    return Paths::FromUtf8(s);
-}
-
 struct FileBrowserState
 {
     bool Open = false;
@@ -60,7 +42,7 @@ bool ExtensionMatches(const std::filesystem::path& p,
                       const std::vector<std::string>& exts)
 {
     if (exts.empty()) return true;
-    std::string e = PathToUtf8(p.extension());           
+    std::string e = Paths::ToUtf8(p.extension());           
     std::transform(e.begin(), e.end(), e.begin(),
                    [](unsigned char c){ return (char)std::tolower(c); });
     for (const auto& x : exts)
@@ -196,7 +178,7 @@ void DrawFileBrowserPopup()
 
         ImGui::SameLine();
         ImGui::TextWrapped("%s",
-            PathToUtf8(g_Browser.CurrentDir).c_str());   
+            Paths::ToUtf8(g_Browser.CurrentDir).c_str());   
         ImGui::Separator();
 
         
@@ -231,7 +213,7 @@ void DrawFileBrowserPopup()
                 catch (const std::filesystem::filesystem_error& e)
                 {
                     BINAX_LOG_WARN("[PropertyWidgets] cannot list '{}': {}",
-                                   PathToUtf8(g_Browser.CurrentDir), e.what());
+                                   Paths::ToUtf8(g_Browser.CurrentDir), e.what());
                 }
                 std::sort(dirs.begin(), dirs.end());
                 std::sort(files.begin(), files.end());
@@ -242,7 +224,7 @@ void DrawFileBrowserPopup()
                 
                 for (const auto& d : dirs)
                 {
-                    const std::string name = PathToUtf8(d.filename());  
+                    const std::string name = Paths::ToUtf8(d.filename());  
 
                     ImGui::PushID(name.c_str());
                     ImGui::PushStyleColor(ImGuiCol_Text,
@@ -272,7 +254,7 @@ void DrawFileBrowserPopup()
                 
                 for (const auto& f : files)
                 {
-                    const std::string name = PathToUtf8(f.filename());  
+                    const std::string name = Paths::ToUtf8(f.filename());  
                     ImGui::PushID(name.c_str());
 
                     if (ImGui::Selectable(name.c_str(), false,
@@ -284,7 +266,7 @@ void DrawFileBrowserPopup()
                             g_Browser.OnSelect = nullptr;
                             g_Browser.Open = false;
                             ImGui::CloseCurrentPopup();
-                            cb(PathToUtf8(f));   
+                            cb(Paths::ToUtf8(f));   
                         }
                     }
                     ImGui::PopID();
@@ -503,7 +485,7 @@ bool PropertyWidgets::Draw(void* obj, const PropertyInfo& prop)
         
         std::string display = path->empty()
             ? "(none)"
-            : PathToUtf8(PathFromUtf8(*path).filename());
+            : Paths::ToUtf8(Paths::FromUtf8(*path).filename());
 
         ImGui::TextUnformatted(display.c_str());
         ImGui::SameLine();

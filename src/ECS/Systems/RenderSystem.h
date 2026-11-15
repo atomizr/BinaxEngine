@@ -303,7 +303,10 @@ static void CollectLights(entt::registry& registry, std::vector<GPULight>& out)
         if (gbuffer.GetFramebufferID() == 0)
             return entt::null;
 
-        if (frame.Instances.empty() || frame.InstanceEntities.empty())
+        if (frame.Instances.empty() && frame.TransparentInstances.empty())
+            return entt::null;
+
+        if (frame.InstanceEntities.empty() && frame.TransparentInstances.empty())
             return entt::null;
 
         const int w = (int)gbuffer.GetWidth();
@@ -316,48 +319,66 @@ static void CollectLights(entt::registry& registry, std::vector<GPULight>& out)
         px = std::clamp(px, 0, w - 1);
         py = std::clamp(py, 0, h - 1);
 
-        float worldPos[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-
-
+        // FIX #7a: сохраняем не только READ_FRAMEBUFFER, но и READ_BUFFER.
+        // glReadBuffer() — глобальное состояние; без restore все последующие
+        // glReadPixels в других FBO будут вести себя непредсказуемо.
         GLint prevReadFBO = 0;
+        GLint prevReadBuf = GL_COLOR_ATTACHMENT0;
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+        glGetIntegerv(GL_READ_BUFFER,              &prevReadBuf);
+
+        float worldPos[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, gbuffer.GetFramebufferID());
         glReadBuffer(GL_COLOR_ATTACHMENT0);
         glReadPixels(px, py, 1, 1, GL_RGBA, GL_FLOAT, worldPos);
 
+        // FIX #7a: восстанавливаем READ_BUFFER тоже.
+        glReadBuffer((GLenum)prevReadBuf);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevReadFBO);
 
         const glm::vec3 p(worldPos[0], worldPos[1], worldPos[2]);
 
-
+        // Фон (skybox) — нет попадания
         if (p.x == 0.0f && p.y == 0.0f && p.z == 0.0f)
             return entt::null;
 
-        const size_t n = std::min(frame.Instances.size(),
-                                  frame.InstanceEntities.size());
-
-        for (size_t i = 0; i < n; ++i)
+        // FIX #7a: раньше искали только среди opaque; прозрачные (стекло,
+        // вода) не выбирались кликом. Теперь проверяем оба списка. При
+        // коллизии предпочитаем тот, что ближе к камере — но т.к. на входе
+        // нет cameraPosition, берём первое попадание в opaque (он был
+        // отрисован раньше), затем fallback на transparent.
+        auto pointInAABB = [&](const InstanceGPU& inst, const glm::vec3& wp) -> bool
         {
-            const auto& inst = frame.Instances[i];
             if (!MeshLibrary::Get().IsValid(inst.MeshId))
-                continue;
+                return false;
 
             const MeshGPU& mesh = MeshLibrary::Get().Get(inst.MeshId);
-
-
             const glm::mat4 invModel = glm::inverse(inst.Model);
-            const glm::vec3 lp = glm::vec3(invModel * glm::vec4(p, 1.0f));
+            const glm::vec3 lp = glm::vec3(invModel * glm::vec4(wp, 1.0f));
 
-
+            // 0.5% допуск — компенсирует FP-погрешность при обратной матрице
             const glm::vec3 ext = (mesh.AABBMax - mesh.AABBMin) * 0.005f;
 
-            if (lp.x >= mesh.AABBMin.x - ext.x && lp.x <= mesh.AABBMax.x + ext.x &&
-                lp.y >= mesh.AABBMin.y - ext.y && lp.y <= mesh.AABBMax.y + ext.y &&
-                lp.z >= mesh.AABBMin.z - ext.z && lp.z <= mesh.AABBMax.z + ext.z)
-            {
+            return lp.x >= mesh.AABBMin.x - ext.x && lp.x <= mesh.AABBMax.x + ext.x &&
+                   lp.y >= mesh.AABBMin.y - ext.y && lp.y <= mesh.AABBMax.y + ext.y &&
+                   lp.z >= mesh.AABBMin.z - ext.z && lp.z <= mesh.AABBMax.z + ext.z;
+        };
+
+        const size_t nOpaque = std::min(frame.Instances.size(),
+                                        frame.InstanceEntities.size());
+        for (size_t i = 0; i < nOpaque; ++i)
+        {
+            if (pointInAABB(frame.Instances[i], p))
                 return frame.InstanceEntities[i];
-            }
+        }
+
+        // FIX #7a: прозрачные тоже выбираемы
+        for (const auto& ti : frame.TransparentInstances)
+        {
+            if (ti.Entity == entt::null) continue;
+            if (pointInAABB(ti.GPU, p))
+                return ti.Entity;
         }
 
         return entt::null;

@@ -70,17 +70,6 @@ std::string SanitizeFileName(const std::string& name)
     return out;
 }
 
-
-std::string PathToUtf8(const std::filesystem::path& p)
-{
-    return Binax::Paths::ToUtf8(p);
-}
-
-std::filesystem::path PathFromUtf8(const std::string& s)
-{
-    return Binax::Paths::FromUtf8(s);
-}
-
 std::string ToLowerAscii(const std::string& s)
 {
     std::string out = s;
@@ -2129,7 +2118,7 @@ void EditorUI::DrawMaterialEditor()
 
                 std::string display = currentPath.empty()
                     ? "(none)"
-                    : PathToUtf8(PathFromUtf8(currentPath).filename());
+                    : Paths::ToUtf8(Paths::FromUtf8(currentPath).filename());
                 ImGui::TextWrapped("%s", display.c_str());
                 ImGui::SameLine();
 
@@ -2693,9 +2682,9 @@ void EditorUI::ExecutePendingImport()
     auto resolveTexPath = [&](const std::string& p) -> std::string
     {
         if (p.empty()) return {};
-        std::filesystem::path tp = PathFromUtf8(p);
-        if (tp.is_absolute()) return PathToUtf8(tp);
-        return PathToUtf8(modelDir / tp);
+        std::filesystem::path tp = Paths::FromUtf8(p);
+        if (tp.is_absolute()) return Paths::ToUtf8(tp);
+        return Paths::ToUtf8(modelDir / tp);
     };
 
     // ---- 6. Материалы -----------------------------------------------------
@@ -2920,16 +2909,34 @@ std::vector<entt::entity> EditorUI::CollectSubtree(entt::entity root) const
     if (!m_Registry.valid(root))
         return out;
 
+    // FIX #54: строим children map за один проход. Раньше внутри цикла
+    // делался view<ParentComponent>() на каждую итерацию → O(N²) на
+    // больших сценах (5000 сущностей × 1000 детей = миллионы).
+    std::unordered_map<entt::entity, std::vector<entt::entity>> children;
+    children.reserve(64);
+
+    auto view = m_Registry.view<ParentComponent>();
+    for (auto e : view)
+    {
+        const auto parent = view.get<ParentComponent>(e).Parent;
+        if (parent == entt::null || parent == e || !m_Registry.valid(parent))
+            continue;
+        children[parent].push_back(e);
+    }
+
     out.push_back(root);
     std::unordered_set<entt::entity> seen{ root };
 
     for (size_t i = 0; i < out.size(); ++i)
     {
-        auto view = m_Registry.view<ParentComponent>();
-        for (auto e : view)
+        const auto it = children.find(out[i]);
+        if (it == children.end())
+            continue;
+
+        for (auto child : it->second)
         {
-            if (view.get<ParentComponent>(e).Parent == out[i] && seen.insert(e).second)
-                out.push_back(e);
+            if (seen.insert(child).second)
+                out.push_back(child);
         }
     }
 
@@ -3046,10 +3053,15 @@ void EditorUI::LoadEditorFont()
 
                 if (readBytes == static_cast<size_t>(sz))
                 {
-
+                    // FIX #29: явно декларируем ownership. Если в будущем
+                    // версия ImGui начнёт копировать данные
+                    // (FontDataOwnedByAtlas = false) — double-free не случится.
+                    ImFontConfig cfg;
+                    cfg.FontDataOwnedByAtlas = true;   // ImGui → free(buf)
+                    cfg.SizePixels           = fontSize;
 
                     ImFont* font = io.Fonts->AddFontFromMemoryTTF(
-                        buf, static_cast<int>(sz), fontSize);
+                        buf, static_cast<int>(sz), fontSize, &cfg);
 
                     if (font)
                     {
@@ -3059,12 +3071,15 @@ void EditorUI::LoadEditorFont()
                     }
                     else
                     {
+                        // ImGui не взял ownership → освобождаем сами
                         std::free(buf);
                         BINAX_LOG_WARN("[Editor] Failed to parse font '{}'", fontPath);
                     }
                 }
                 else
                 {
+                    // FIX: восстановлена обработка короткого чтения
+                    // (была потеряна при правке #29 → утечка buf)
                     std::free(buf);
                     BINAX_LOG_WARN("[Editor] Short read while loading font '{}'", fontPath);
                 }
@@ -3077,10 +3092,8 @@ void EditorUI::LoadEditorFont()
         BINAX_LOG_INFO("[Editor] Font not found at '{}', using default", fontPath);
     }
 
-
     if (!textFontLoaded)
         io.Fonts->AddFontDefault();
-
 
     ImGui::MergeIconsWithLatestFont(fontSize);
     BINAX_LOG_INFO("[Editor] Font Awesome 5 icons merged");
