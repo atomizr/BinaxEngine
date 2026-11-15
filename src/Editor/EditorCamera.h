@@ -40,6 +40,21 @@ public:
 
     
     static constexpr float kMaxPitchRadians = 1.5690511f;
+        // FIX(TAA): сообщаем наружу, когда камера начала/закончила движение —
+    // main loop сбрасывает TAA-историю, чтобы не было фантомов при
+    // стоп-кадре и при первом кадре после остановки.
+    bool ConsumeMotionStarted()
+    {
+        const bool v = m_MotionStarted;
+        m_MotionStarted = false;
+        return v;
+    }
+    bool ConsumeMotionStopped()
+    {
+        const bool v = m_MotionStopped;
+        m_MotionStopped = false;
+        return v;
+    }
 
 private:
     glm::vec3 m_Position;
@@ -69,6 +84,8 @@ private:
 
     void UpdateMatrices();
     void RebuildOrientation();
+    bool m_MotionStarted = false;
+    bool m_MotionStopped = false;
 };
 
 } 

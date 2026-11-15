@@ -27,7 +27,10 @@ struct CameraComponent
 
     
     bool  TAAEnabled       = false;
-    float TAAHistoryWeight = 0.90f;
+    // FIX(TAA): 0.90 → 0.93 — меньше per-frame jitter на статике.
+    // Цена: чуть более «тяжёлый» старт после движения камеры (уже
+    // компенсируется speedPx-адаптивным весом в taa.frag).
+    float TAAHistoryWeight = 0.93f;
 };
 
 } 

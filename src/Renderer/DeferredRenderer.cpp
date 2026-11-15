@@ -428,6 +428,11 @@ void DeferredRenderer::GeometryPass(FrameRenderData& frame,
     if (!m_HasPrevViewProj)
     {
         m_PrevViewProj    = projectionJittered * viewMatrix;
+        // FIX(TAA): синхронизируем PrevJitter с тем jitter'ом, который
+        // реально использован для m_PrevViewProj. Без этого на первом
+        // кадре после включения TAA motion blur видит delta = (0 - jitter)/2
+        // и накладывает фантомную скорость на статичную сцену.
+        m_PrevJitter      = m_Jitter;
         m_HasPrevViewProj = true;
     }
 
@@ -1279,7 +1284,11 @@ void DeferredRenderer::ApplyTAA(uint32_t width, uint32_t height,
     m_TAAShader->SetFloat("u_HistoryWeight",
                           glm::clamp(params.HistoryWeight, 0.0f, 0.98f));
     m_TAAShader->SetInt  ("u_HistoryValid", m_TAAHistoryValid ? 1 : 0);
-    m_TAAShader->SetFloat("u_ClampGamma", 1.25f);
+        // FIX(TAA): 1.25 слишком агрессивно — history клампится к дисперсии
+    // 3×3 neighborhood, и на статике «новый» jittered-кадр успевает
+    // пролезть вместо накопленной истории → видимый sub-pixel jitter на
+    // резких краях. 1.5 — стандарт (UE/Unity), история живёт дольше.
+    m_TAAShader->SetFloat("u_ClampGamma", 1.5f);
     m_TAAShader->SetMat4 ("u_ViewProj",     viewProj);
     m_TAAShader->SetMat4 ("u_PrevViewProj", m_PrevViewProj);
     m_TAAShader->SetMat4 ("u_InvViewProj",  invViewProj);

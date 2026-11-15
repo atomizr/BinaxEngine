@@ -53,13 +53,15 @@ void EditorCamera::Update(float deltaTime)
         Input::SetCursorMode(GLFW_CURSOR_DISABLED);
         m_LastMouseX = Input::GetMouseX();
         m_LastMouseY = Input::GetMouseY();
-        m_IsRotating  = true;
-        m_JustCaptured = true;   // ← FIX #9: пропустить первый delta после захвата
+        m_IsRotating   = true;
+        m_JustCaptured = true;
+        m_MotionStarted = true;    // ← FIX(TAA)
     }
     else if (!pressed && m_WasRightPressed)
     {
         Input::SetCursorMode(GLFW_CURSOR_NORMAL);
         m_IsRotating = false;
+        m_MotionStopped = true;    // ← FIX(TAA)
     }
     m_WasRightPressed = pressed;
 
