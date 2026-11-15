@@ -211,10 +211,10 @@ void EditorUI::SaveScene()
             Paths::Resolve(AssetFiles::kShadowsFile));
     }
 
-    // Bakes сохраняются в конце кадра через main loop → ConsumePendingSaveProbes.
-    // Это надёжнее, чем дёргать SaveToFile прямо здесь: библиотека может
-    // быть ещё не инициализирована (нет ни одной пробы).
     m_PendingSaveProbes = true;
+
+    // FIX #34: после Ctrl+S нечего «терять»
+    m_HasUnsavedChanges = false;
 
     Notify(ImGuiToastType_Success, 3000, "Scene saved");
 }
@@ -226,6 +226,16 @@ void EditorUI::LoadScene()
 
     m_EditingMaterial    = kInvalidMaterial;
     m_ShowMaterialEditor = false;
+
+    // FIX #31: сбрасываем «повисшие» отложенные действия — иначе
+    // DeleteEntity/DuplicateEntity из контекстного меню или ExecutePendingImport
+    // сработают на новую сцену с невалидными/чужими handle-ами.
+    m_PendingDelete       = entt::null;
+    m_PendingDuplicate    = entt::null;
+    m_PendingImport       = {};
+    m_GizmoWasUsing       = false;
+    m_InspectorPendingRec = false;
+    m_PendingSaveProbes   = false;
 
     const std::string materialDir = Paths::Resolve(AssetFiles::kMaterialsDir);
     const std::string levelPath   = Paths::Resolve(AssetFiles::kLevelFile);
@@ -289,7 +299,10 @@ void EditorUI::LoadScene()
     BINAX_LOG_INFO("Level loaded");
 
     RebuildReflectionProbeLibrary();      // ← FIX #3
-    MarkCameraTeleported();               // ← FIX #5 (см. ниже)
+    MarkCameraTeleported();               // ← FIX #5
+
+    // FIX #34: после успешной загрузки нечего «терять» — сцена чистая
+    m_HasUnsavedChanges = false;
 
     ResetUndo();
     Notify(ImGuiToastType_Success, 3000, "Level loaded");
@@ -502,8 +515,21 @@ void EditorUI::HandleShortcuts()
 
     if (Input::IsKeyJustPressed(GLFW_KEY_DELETE))
     {
-        if (m_SelectedEntity != entt::null && m_Registry.valid(m_SelectedEntity))
-            DeleteEntity(m_SelectedEntity);
+        // FIX #27: удаляем все выделенные, а не только primary.
+        // Снимок — потому что DeleteEntity мутирует m_SelectedEntities.
+        // Пропускаем protected/system/invalid — иначе DeleteEntity
+        // выдаст N предупреждений в консоль при попытке удалить
+        // camera/skybox/postprocess.
+        const std::vector<entt::entity> snapshot(
+            m_SelectedEntities.begin(), m_SelectedEntities.end());
+        for (auto e : snapshot)
+        {
+            if (!m_Registry.valid(e))
+                continue;
+            if (m_Registry.any_of<SystemEntityTag>(e) || IsProtectedEntity(e))
+                continue;
+            DeleteEntity(e);
+        }
     }
 
     
@@ -527,7 +553,13 @@ void EditorUI::HandleShortcuts()
         SaveScene();
 
     if (ctrl && Input::IsKeyJustPressed(GLFW_KEY_O))
-        LoadScene();
+    {
+        // FIX #34: не затираем изменения без подтверждения
+        if (m_HasUnsavedChanges)
+            m_RequestDiscardConfirm = true;
+        else
+            LoadScene();
+    }
 
     if (ctrl && Input::IsKeyJustPressed(GLFW_KEY_Z))
     {
@@ -736,6 +768,7 @@ void EditorUI::Draw()
     PropertyWidgets::DrawFileBrowser();
     DrawImportDialog();
     DrawShadowSettingsWindow();
+    DrawDiscardConfirmDialog();
 
     for (auto& cb : m_ExtraPanelDrawers)
         if (cb) cb();
@@ -2211,12 +2244,20 @@ void EditorUI::CreateCubeEntity()
 
     entt::entity entity = m_Registry.create();
 
-    const int gridIdx = nextIndex - 1;
-    const float offsetX = 1.5f * (gridIdx % 5);
-    const float offsetZ = 1.5f * ((gridIdx / 5) % 5);
+    // FIX #25: после 25 кубов (5×5) следующий уходил в (0,0,0) — поверх
+    // первого. Теперь каждые 25 кубов формируют отдельный «этаж» по Y,
+    // позиции никогда не совпадают.
+    constexpr int kGridSize = 5;   // 5×5 = 25 на слой
+    constexpr float kStep   = 1.5f;
+
+    const int gridIdx  = nextIndex - 1;
+    const int layer    = gridIdx / (kGridSize * kGridSize);
+    const float offsetX = kStep * (gridIdx % kGridSize);
+    const float offsetY = kStep * layer;
+    const float offsetZ = kStep * ((gridIdx / kGridSize) % kGridSize);
 
     m_Registry.emplace<Transform>(entity,
-                                  glm::vec3(offsetX, 0.0f, offsetZ),
+                                  glm::vec3(offsetX, offsetY, offsetZ),
                                   glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
                                   glm::vec3(1.0f));
 
@@ -3258,12 +3299,18 @@ void EditorUI::ResetUndo()
     m_UndoStates.clear();
     m_UndoStates.push_back(CaptureScene());
     m_UndoCursor = 0;
+
+    // FIX #34: стартовое состояние = ничего не сохранено, но и не изменено
+    m_HasUnsavedChanges = false;
 }
 
 void EditorUI::RecordUndo()
 {
     if (m_UndoSuppress)
         return;
+
+    // FIX #34: любое undo-able изменение = несохранённые правки
+    m_HasUnsavedChanges = true;
 
     std::string state = CaptureScene();
 
@@ -3333,6 +3380,38 @@ void EditorUI::RestoreScene(const std::string& state)
     MarkCameraTeleported();               // ← FIX #5 (см. ниже)
 
     m_UndoSuppress = false;
+}
+
+void EditorUI::DrawDiscardConfirmDialog()
+{
+    // FIX #34: RequestOpen-паттерн как у файлового браузера —
+    // OpenPopup вызывается один раз, а не каждый кадр (иначе модалка
+    // самозакрывается и тут же открывается).
+    if (m_RequestDiscardConfirm)
+    {
+        ImGui::OpenPopup("Discard Changes##confirm");
+        m_RequestDiscardConfirm = false;
+    }
+
+    if (ImGui::BeginPopupModal("Discard Changes##confirm", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("You have unsaved changes.");
+        ImGui::TextDisabled("Loading another scene will discard them.");
+        ImGui::Separator();
+
+        if (ImGui::Button("Discard & Load", ImVec2(150, 0)))
+        {
+            ImGui::CloseCurrentPopup();
+            LoadScene();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(100, 0)))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void EditorUI::SelectOnly(entt::entity e)

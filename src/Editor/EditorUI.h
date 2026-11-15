@@ -63,6 +63,7 @@ public:
     using PickCallback = std::function<entt::entity(ImVec2 uv)>;
     void SetPickCallback(PickCallback cb) { m_PickCallback = std::move(cb); }
     entt::entity GetSelectedEntity() const { return m_SelectedEntity; }
+    bool HasUnsavedChanges() const { return m_HasUnsavedChanges; }
     const std::unordered_set<entt::entity>& GetSelectedEntities() const
     {
         return m_SelectedEntities;
@@ -191,9 +192,12 @@ private:
     void CreateReflectionProbeEntity();
     void DrawReflectionProbeGizmos();
     bool m_PendingSaveProbes = false;
+    bool m_HasUnsavedChanges      = false;   // FIX #34
+    bool m_RequestDiscardConfirm  = false;   // FIX #34
     bool m_CameraTeleported = false;
     void MarkCameraTeleported() { m_CameraTeleported = true; }
     void RebuildReflectionProbeLibrary();
+    void DrawDiscardConfirmDialog();         // FIX #34
 };
 
 }
