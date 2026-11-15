@@ -22,7 +22,10 @@ public:
     static bool Load(MaterialLibrary& lib, const std::string& filepath);
 
     
-    static void LoadAll(MaterialLibrary& lib, const std::string& directory);
+        // FIX #35: возвращаем количество успешно загруженных материалов
+    // (не считая авто-созданный __Default), чтобы вызывающая сторона
+    // могла предупредить пользователя.
+    static uint32_t LoadAll(MaterialLibrary& lib, const std::string& directory);
 
 private:
     static std::string SanitizeFileName(const std::string& name);

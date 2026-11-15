@@ -193,10 +193,11 @@ bool MaterialSerializer::Load(MaterialLibrary& lib, const std::string& filepath)
     return true;
 }
 
-void MaterialSerializer::LoadAll(MaterialLibrary& lib, const std::string& directory)
+uint32_t MaterialSerializer::LoadAll(MaterialLibrary& lib, const std::string& directory)
 {
     lib.Clear();
 
+    uint32_t loaded = 0;
     std::error_code ec;
     const fs::path dir = Paths::FromUtf8(directory);
     if (fs::exists(dir, ec) && !ec && fs::is_directory(dir, ec) && !ec)
@@ -212,7 +213,8 @@ void MaterialSerializer::LoadAll(MaterialLibrary& lib, const std::string& direct
                     continue;
                 if (entry.path().extension() != AssetFiles::kMaterialExt)
                     continue;
-                Load(lib, Paths::ToUtf8(entry.path()));
+                if (Load(lib, Paths::ToUtf8(entry.path())))
+                    ++loaded;
             }
         }
         catch (const std::filesystem::filesystem_error& e)
@@ -224,8 +226,8 @@ void MaterialSerializer::LoadAll(MaterialLibrary& lib, const std::string& direct
     lib.GetOrCreateDefault();
     lib.Flush();
 
-    BINAX_LOG_INFO("Materials loaded from {0}: {1}", directory,
-                   lib.GetMaterialCount());
+    BINAX_LOG_INFO("Materials loaded from {0}: {1}", directory, loaded);
+    return loaded;
 }
 
 }

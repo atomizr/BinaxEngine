@@ -213,6 +213,19 @@ void EditorUI::SaveScene()
     SceneSerializer::Serialize(m_Registry, levelPath);
     PostProcessSerializer::Save(m_Registry, ppPath);
 
+    // FIX #23: Ctrl+S сохраняет и shadow settings, и reflection bakes —
+    // иначе пользователь выходит с «потерянными» настройками.
+    if (m_ShadowSettings)
+    {
+        ShadowSettingsSerializer::Save(
+            *m_ShadowSettings,
+            Paths::Resolve(AssetFiles::kShadowsFile));
+    }
+
+    // Bakes сохраняются в конце кадра через main loop → ConsumePendingSaveProbes.
+    // Это надёжнее, чем дёргать SaveToFile прямо здесь: библиотека может
+    // быть ещё не инициализирована (нет ни одной пробы).
+    m_PendingSaveProbes = true;
 
     Notify(ImGuiToastType_Success, 3000, "Scene saved");
 }
@@ -237,7 +250,18 @@ void EditorUI::LoadScene()
         return;
     }
 
-    MaterialSerializer::LoadAll(MaterialLibrary::Get(), materialDir);
+    {
+        const uint32_t loaded =
+            MaterialSerializer::LoadAll(MaterialLibrary::Get(), materialDir);
+        if (loaded == 0)
+        {
+            // FIX #35: пользователь должен знать, что материалы не загрузились
+            BINAX_LOG_WARN("No materials loaded from '{}'", materialDir);
+            Notify(ImGuiToastType_Warning, 3500,
+                   "No materials loaded — check '%s'",
+                   AssetFiles::kMaterialsDir);
+        }
+    }
 
     if (!SceneSerializer::Deserialize(m_Registry, levelPath))
     {
@@ -662,8 +686,6 @@ std::string EditorUI::MakeUniqueName(const std::string& sourceName) const
 {
     std::string base = sourceName;
 
-    
-    
     auto stripNumericSuffix = [](std::string& s, char separator)
     {
         const size_t pos = s.find_last_of(separator);
@@ -683,10 +705,19 @@ std::string EditorUI::MakeUniqueName(const std::string& sourceName) const
     if (base.empty())
         base = "Object";
 
+    // FIX #55: строим set один раз — раньше IsNameTaken вызывался в цикле
+    // до 100k раз и каждый раз проходил по всему view (O(N²)).
+    std::unordered_set<std::string> existingNames;
+    existingNames.reserve(64);
+
+    auto view = m_Registry.view<NameComponent>();
+    for (auto entity : view)
+        existingNames.insert(view.get<NameComponent>(entity).Name);
+
     for (int index = 1; index < 100000; ++index)
     {
         std::string candidate = base + "_" + std::to_string(index);
-        if (!IsNameTaken(candidate))
+        if (existingNames.find(candidate) == existingNames.end())
             return candidate;
     }
 
@@ -1169,67 +1200,79 @@ void EditorUI::DrawGizmo()
         glm::vec3 translation, scale, skew;
         glm::vec4 perspective;
         glm::quat rotation;
-        glm::decompose(local, scale, rotation, translation, skew, perspective);
 
-        if (m_SnapEnabled)
+        // FIX #18: раньше return decompose игнорировался — при вырожденной
+        // матрице (масштаб родителя ≈ 0) translation/scale/rotation содержали
+        // мусор. Теперь применяем трансформ только при успешной декомпозиции.
+        if (!glm::decompose(local, scale, rotation, translation, skew, perspective))
         {
-            const float step = SnapStep();
-            if (step > 1e-5f)
+            BINAX_LOG_WARN("Gizmo: matrix decompose failed, keeping previous transform");
+        }
+        else
+        {
+            if (m_SnapEnabled)
             {
-                if (m_GizmoOperation == 0)
+                const float step = SnapStep();
+                if (step > 1e-5f)
                 {
-                    glm::vec3 worldPos(model[3]);
-                    worldPos = glm::round(worldPos / step) * step;
-
-                    glm::mat4 snappedWorld = model;
-                    snappedWorld[3] = glm::vec4(worldPos, 1.0f);
-
-                    const glm::mat4 snappedLocal =
-                        glm::inverse(parentWorld) * snappedWorld;
-                    glm::decompose(snappedLocal, scale, rotation, translation,
-                                   skew, perspective);
-                }
-                else if (m_GizmoOperation == 1)
-                {
-                    const glm::vec3 euler = glm::degrees(glm::eulerAngles(rotation));
-                    rotation = glm::quat(glm::radians(glm::round(euler / step) * step));
-                }
-                else
-                {
-                    const glm::vec3 snapped = glm::round(scale / step) * step;
-                    auto keepNonZero = [step](float v)
+                    if (m_GizmoOperation == 0)
                     {
-                        if (std::abs(v) < step)
-                            return (v < 0.0f) ? -step : step;
-                        return v;
-                    };
-                    scale.x = keepNonZero(snapped.x);
-                    scale.y = keepNonZero(snapped.y);
-                    scale.z = keepNonZero(snapped.z);
+                        glm::vec3 worldPos(model[3]);
+                        worldPos = glm::round(worldPos / step) * step;
+
+                        glm::mat4 snappedWorld = model;
+                        snappedWorld[3] = glm::vec4(worldPos, 1.0f);
+
+                        const glm::mat4 snappedLocal =
+                            glm::inverse(parentWorld) * snappedWorld;
+                        if (!glm::decompose(snappedLocal, scale, rotation, translation,
+                                            skew, perspective))
+                        {
+                            BINAX_LOG_WARN("Gizmo: snapped decompose failed, ignoring snap");
+                        }
+                    }
+                    else if (m_GizmoOperation == 1)
+                    {
+                        const glm::vec3 euler = glm::degrees(glm::eulerAngles(rotation));
+                        rotation = glm::quat(glm::radians(glm::round(euler / step) * step));
+                    }
+                    else
+                    {
+                        const glm::vec3 snapped = glm::round(scale / step) * step;
+                        auto keepNonZero = [step](float v)
+                        {
+                            if (std::abs(v) < step)
+                                return (v < 0.0f) ? -step : step;
+                            return v;
+                        };
+                        scale.x = keepNonZero(snapped.x);
+                        scale.y = keepNonZero(snapped.y);
+                        scale.z = keepNonZero(snapped.z);
+                    }
                 }
             }
+
+            constexpr float kMinScale = 1e-4f;
+            auto clampScale = [&](float s)
+            {
+                if (!std::isfinite(s) || std::abs(s) < kMinScale)
+                    return (s < 0.0f) ? -kMinScale : kMinScale;
+                return s;
+            };
+            scale.x = clampScale(scale.x);
+            scale.y = clampScale(scale.y);
+            scale.z = clampScale(scale.z);
+
+            if (std::isfinite(translation.x) && std::isfinite(translation.y) &&
+                std::isfinite(translation.z))
+                transform.Position = translation;
+
+            const float qlen2 = rotation.w * rotation.w + rotation.x * rotation.x +
+                                rotation.y * rotation.y + rotation.z * rotation.z;
+            transform.Rotation = (qlen2 > 1e-12f) ? glm::normalize(rotation)
+                                                  : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            transform.Scale    = scale;
         }
-
-        constexpr float kMinScale = 1e-4f;
-        auto clampScale = [&](float s)
-        {
-            if (!std::isfinite(s) || std::abs(s) < kMinScale)
-                return (s < 0.0f) ? -kMinScale : kMinScale;
-            return s;
-        };
-        scale.x = clampScale(scale.x);
-        scale.y = clampScale(scale.y);
-        scale.z = clampScale(scale.z);
-
-        if (std::isfinite(translation.x) && std::isfinite(translation.y) &&
-            std::isfinite(translation.z))
-            transform.Position = translation;
-
-        const float qlen2 = rotation.w * rotation.w + rotation.x * rotation.x +
-                            rotation.y * rotation.y + rotation.z * rotation.z;
-        transform.Rotation = (qlen2 > 1e-12f) ? glm::normalize(rotation)
-                                              : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-        transform.Scale    = scale;
     }
 
 

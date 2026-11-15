@@ -281,7 +281,7 @@ static void CollectLights(entt::registry& registry, std::vector<GPULight>& out)
         gpu.InnerCutoff = lc.InnerCutoff;
         gpu.OuterCutoff = lc.OuterCutoff;
         gpu.Direction   = worldDir;
-        gpu.ShadowMode     = static_cast<int>(lc.ShadowMode);
+        gpu.ShadowMode     = static_cast<int>(lc.Mode);
         gpu.ShadowStrength = lc.ShadowStrength;
         gpu.BiasMultiplier = lc.BiasMultiplier;
 

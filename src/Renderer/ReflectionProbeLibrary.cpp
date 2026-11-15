@@ -50,37 +50,54 @@ void ReflectionProbeLibrary::RecreateArray(uint32_t resolution, uint32_t count)
     // ---- Копируем старые слои, если разрешение совпадает ----------------
     if (oldTex && oldCount > 0 && oldResolution == resolution)
     {
-        GLint prevRead = 0, prevDraw = 0;
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
-
-        GLuint tmpRead = 0, tmpDraw = 0;
-        glGenFramebuffers(1, &tmpRead);
-        glGenFramebuffers(1, &tmpDraw);
-
         const uint32_t layersToCopy = std::min(oldCount, count);
-        for (uint32_t layer = 0; layer < layersToCopy * 6; ++layer)
+
+        // FIX #21: старый путь делал FBO-switch + blit на каждый layer
+        // (24 итерации при 4 пробах). glCopyImageSubData копирует весь
+        // массив за один вызов — GL 4.3+ / ARB_copy_image.
+        if (GLAD_GL_VERSION_4_3 || GLAD_GL_ARB_copy_image)
         {
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, tmpRead);
-            glFramebufferTextureLayer(GL_READ_FRAMEBUFFER,
-                                      GL_COLOR_ATTACHMENT0,
-                                      oldTex, 0, (GLint)layer);
-
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tmpDraw);
-            glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER,
-                                      GL_COLOR_ATTACHMENT0,
-                                      m_TextureArray, 0, (GLint)layer);
-
-            glBlitFramebuffer(0, 0, (GLint)oldResolution, (GLint)oldResolution,
-                              0, 0, (GLint)resolution, (GLint)resolution,
-                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glCopyImageSubData(
+                oldTex,         GL_TEXTURE_CUBE_MAP_ARRAY, 0, 0, 0, 0,
+                m_TextureArray, GL_TEXTURE_CUBE_MAP_ARRAY, 0, 0, 0, 0,
+                (GLsizei)resolution, (GLsizei)resolution,
+                (GLsizei)(layersToCopy * 6));
         }
+        else
+        {
+            // Fallback для очень старых драйверов (движку требуется 4.6,
+            // но оставляем на случай отладки на чужой машине).
+            GLint prevRead = 0, prevDraw = 0;
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
 
-        glDeleteFramebuffers(1, &tmpRead);
-        glDeleteFramebuffers(1, &tmpDraw);
+            GLuint tmpRead = 0, tmpDraw = 0;
+            glGenFramebuffers(1, &tmpRead);
+            glGenFramebuffers(1, &tmpDraw);
 
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)prevDraw);
+            for (uint32_t layer = 0; layer < layersToCopy * 6; ++layer)
+            {
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, tmpRead);
+                glFramebufferTextureLayer(GL_READ_FRAMEBUFFER,
+                                          GL_COLOR_ATTACHMENT0,
+                                          oldTex, 0, (GLint)layer);
+
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tmpDraw);
+                glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER,
+                                          GL_COLOR_ATTACHMENT0,
+                                          m_TextureArray, 0, (GLint)layer);
+
+                glBlitFramebuffer(0, 0, (GLint)oldResolution, (GLint)oldResolution,
+                                  0, 0, (GLint)resolution, (GLint)resolution,
+                                  GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            }
+
+            glDeleteFramebuffers(1, &tmpRead);
+            glDeleteFramebuffers(1, &tmpDraw);
+
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)prevDraw);
+        }
     }
 
     glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, 0);

@@ -34,8 +34,10 @@ struct LightComponent
     float OuterCutoff = 0.8f;
 
     // ---- Shadow (Directional only, пока) ---------------------------------
-    ShadowMode           ShadowMode           = ShadowMode::None;
-    ShadowResolutionMode ShadowResolutionMode = ShadowResolutionMode::Global;
+    // FIX #11: не называем поле так же, как тип — иначе затенение типа
+    // и сюрпризы при `decltype`, `using namespace`, ADL.
+    ShadowMode           Mode           = ShadowMode::None;
+    ShadowResolutionMode ResolutionMode = ShadowResolutionMode::Global;
     int                  ShadowResolution     = 2048;   // при Custom: 512/1024/2048/4096
     float                ShadowStrength       = 1.0f;   // 0..1 = насколько тёмная тень
     float                BiasMultiplier       = 1.0f;   // × глобальный DepthBias

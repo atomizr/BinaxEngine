@@ -73,14 +73,14 @@ BINAX_REFLECT(Binax::LightComponent)
 
     // ---- Shadow fields (Directional / Spot / Point) -------------------
     // VisibleWhen НЕ ставим — поля нужны для всех трёх типов.
-    info.Add(&LightComponent::ShadowMode, "Shadow Mode", PropertyKind::Enum)
+    info.Add(&LightComponent::Mode, "Shadow Mode", PropertyKind::Enum)
         .SetEnums({
             { (int)ShadowMode::None, "None" },
             { (int)ShadowMode::Hard, "Hard" },
             { (int)ShadowMode::Soft, "Soft" }
         });
 
-    info.Add(&LightComponent::ShadowResolutionMode, "Shadow Res Mode", PropertyKind::Enum)
+    info.Add(&LightComponent::ResolutionMode, "Shadow Res Mode", PropertyKind::Enum)
         .SetEnums({
             { (int)ShadowResolutionMode::Global, "Global" },
             { (int)ShadowResolutionMode::Custom, "Custom" }
