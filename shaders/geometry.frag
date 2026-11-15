@@ -1,7 +1,7 @@
 #version 460 core
 #extension GL_ARB_bindless_texture : require
 
-layout(location = 0) out vec3  g_Position;
+layout(location = 0) out vec4  g_Position;   // rgb=worldPos, a=probeIndex
 layout(location = 1) out vec4  g_NormalA;   // rgb=normal, a=unlitFlag
 layout(location = 2) out vec4  g_Albedo_AO;
 layout(location = 3) out vec4  g_Material;
@@ -110,10 +110,10 @@ void main()
         if (m.EmissiveHandle != kNoHandle)
             emissive = texture(sampler2D(m.EmissiveHandle), uv).r * m.StrengthA.w;
 
-        g_Position  = v_WorldPos;
-        g_NormalA   = vec4(N, 1.0);                    // a=1 → unlit
+        g_Position  = vec4(v_WorldPos, float(inst.Flags >> 16));
+        g_NormalA   = vec4(N, 1.0);
         g_Albedo_AO = vec4(baseColor, 1.0);
-        g_Material  = vec4(0.0, 1.0, emissive, -1.0);  // metallic=0, rough=1, no IBL
+        g_Material  = vec4(0.0, 1.0, emissive, -1.0);
         g_Velocity  = v_Velocity;
         return;
     }
@@ -158,7 +158,7 @@ void main()
         ? max(m.SkyReflParams.y, 0.0)
         : -1.0;
 
-    g_Position  = v_WorldPos;
+    g_Position  = vec4(v_WorldPos, float(inst.Flags >> 16));
     g_NormalA   = vec4(N, 0.0);                        // a=0 → lit
     g_Albedo_AO = vec4(baseColor, ao);
     g_Material  = vec4(metallic, roughness, emissive, skyReflPacked);

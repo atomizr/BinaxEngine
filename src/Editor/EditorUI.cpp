@@ -24,6 +24,7 @@
 #include "Renderer/MaterialLibrary.h"
 #include "Renderer/im_anim.h"
 #include "Renderer/MeshImporter.h"
+#include "Renderer/ReflectionProbeLibrary.h"
 #include "Utils/Log.h"
 #include "Serialization/SceneSerializer.h"
 #include "Serialization/MaterialSerializer.h"
@@ -818,6 +819,7 @@ void EditorUI::DrawViewport()
         // Debug-сетки светов рисуем ДО ImGuizmo, чтобы ручки гизмо
         // оказались сверху и не перекрывались конусами/окружностями.
         DrawLightGizmos();
+        DrawReflectionProbeGizmos();
 
         if (m_ViewportHovered || ImGuizmo::IsUsing())
             DrawGizmo();
@@ -1230,6 +1232,9 @@ void EditorUI::DrawHierarchy()
             ImGui::EndMenu();
         }
 
+                if (ImGui::MenuItem("Reflection Box"))
+            CreateReflectionProbeEntity();
+
         if (ImGui::MenuItem("Import Mesh..."))
         {
             PropertyWidgets::OpenFileBrowser(
@@ -1546,6 +1551,99 @@ void EditorUI::DrawInspector()
             {
                 if (PropertyWidgets::Draw(obj, prop))
                     m_InspectorPendingRec = true;
+            }
+        }
+
+        if (entry.Name == "Reflection Probe" &&
+            m_Registry.any_of<ReflectionProbeComponent>(m_SelectedEntity))
+        {
+            auto& rp = m_Registry.get<ReflectionProbeComponent>(m_SelectedEntity);
+            auto& lib = ReflectionProbeLibrary::Get();
+
+            const std::string bakePath = Paths::Resolve("resources/reflection_bakes.bxbake");
+
+            ImGui::Text("Slot %u / %u", rp.ProbeIndex, lib.GetCount());
+            ImGui::SameLine();
+            ImGui::TextDisabled("[%s]  [lib: %ux%u]",
+                                rp.NeedsBake ? "dirty" : "baked",
+                                lib.GetResolution(), lib.GetCount());
+
+            ImGui::Separator();
+
+
+                        // --- Resolution dropdown ----------------------------------
+            {
+                const uint32_t resList[] = { 128, 256, 512, 1024 };
+                const char*   resStrs[]  = { "128", "256", "512", "1024" };
+
+                int curIdx = 1;
+                for (int i = 0; i < 4; ++i)
+                    if (resList[i] == rp.Resolution) { curIdx = i; break; }
+
+                ImGui::SetNextItemWidth(150.0f);
+                if (ImGui::Combo("Resolution", &curIdx, resStrs, 4))
+                {
+                    const uint32_t newRes = resList[curIdx];
+
+                    // Обновить у всех проб
+                    auto probeView = m_Registry.view<ReflectionProbeComponent>();
+                    for (auto pe : probeView)
+                    {
+                        auto& p = probeView.get<ReflectionProbeComponent>(pe);
+                        p.Resolution = newRes;
+                        p.NeedsBake  = true;
+                    }
+
+                    // Пересоздать массив — данные теряются
+                    if (lib.GetCount() > 0)
+                        lib.RecreateAtResolution(newRes);
+
+                    Notify(ImGuiToastType_Info, 2000,
+                           "Resolution set to %u — all probes need re-bake",
+                           newRes);
+                }
+            }
+
+            // --- Bake buttons -----------------------------------------
+            if (ImGui::Button("Bake Now", ImVec2(150, 0)))
+            {
+                rp.NeedsBake = true;
+                Notify(ImGuiToastType_Info, 1500, "Probe queued for bake");
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Bake + Save", ImVec2(150, 0)))
+            {
+                // Принудительно запекаем в этом кадре все dirty-пробы
+                auto probeView = m_Registry.view<Binax::Transform,
+                                                 Binax::ReflectionProbeComponent>();
+                for (auto pe : probeView)
+                {
+                    probeView.get<Binax::ReflectionProbeComponent>(pe).NeedsBake = true;
+                }
+                Notify(ImGuiToastType_Info, 1500,
+                       "Baking all probes, will save at end of frame");
+                m_PendingSaveProbes = true;
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Load From File", ImVec2(150, 0)))
+            {
+                if (lib.LoadFromFile(bakePath))
+                {
+                    // Обновить все пробы: совпадение resolution
+                    auto probeView = m_Registry.view<ReflectionProbeComponent>();
+                    for (auto pe : probeView)
+                    {
+                        auto& p = probeView.get<ReflectionProbeComponent>(pe);
+                        p.NeedsBake  = false;
+                        p.Resolution = lib.GetResolution();
+                    }
+                    Notify(ImGuiToastType_Success, 2500, "Loaded baked reflections");
+                }
+                else
+                {
+                    Notify(ImGuiToastType_Warning, 2500, "No baked file or invalid");
+                }
             }
         }
 
@@ -2089,6 +2187,116 @@ entt::entity EditorUI::DuplicateSingle(entt::entity src)
     }
 
     return dst;
+}
+
+void EditorUI::CreateReflectionProbeEntity()
+{
+    auto entity = m_Registry.create();
+    m_Registry.emplace<Transform>(entity,
+        glm::vec3(0.0f, 3.0f, 0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+        glm::vec3(1.0f));
+    m_Registry.emplace<EntityFlags>(entity);
+    m_Registry.emplace<NameComponent>(entity, MakeUniqueName("Reflection Probe"));
+
+    ReflectionProbeComponent rp;
+    rp.ProbeIndex = ReflectionProbeLibrary::Get().Create(
+        ReflectionProbeLibrary::kDefaultResolution);
+    rp.NeedsBake = true;
+
+    if (rp.ProbeIndex == 0)
+    {
+        Notify(ImGuiToastType_Warning, 2500,
+               "Reflection probe limit reached (max %u)",
+               ReflectionProbeLibrary::kMaxProbes);
+        m_Registry.destroy(entity);
+        return;
+    }
+
+    m_Registry.emplace<ReflectionProbeComponent>(entity, rp);
+
+    SelectOnly(entity);
+    BINAX_LOG_INFO("Created reflection probe entity {} (slot {})",
+                   (uint32_t)entity, rp.ProbeIndex);
+    Notify(ImGuiToastType_Success, 2000, "Reflection Probe created");
+    RecordUndo();
+}
+
+void EditorUI::DrawReflectionProbeGizmos()
+{
+    if (!m_Viewport) return;
+
+    const ImVec2 vpPos (m_ViewportScreenX, m_ViewportScreenY);
+    const ImVec2 vpSize(m_ViewportScreenW, m_ViewportScreenH);
+    if (vpSize.x <= 0.0f || vpSize.y <= 0.0f) return;
+
+    const glm::mat4 viewProj = m_ProjectionMatrix * m_ViewMatrix;
+
+    auto worldToScreen = [&](const glm::vec3& p, ImVec2& out) -> bool
+    {
+        const glm::vec4 clip = viewProj * glm::vec4(p, 1.0f);
+        if (clip.w <= 1e-4f) return false;
+        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        if (ndc.x < -1.5f || ndc.x > 1.5f ||
+            ndc.y < -1.5f || ndc.y > 1.5f) return false;
+        out.x = vpPos.x + ( ndc.x * 0.5f + 0.5f) * vpSize.x;
+        out.y = vpPos.y + (-ndc.y * 0.5f + 0.5f) * vpSize.y;
+        return true;
+    };
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    auto drawLine3D = [&](const glm::vec3& a, const glm::vec3& b,
+                          ImU32 col, float thick)
+    {
+        ImVec2 sa, sb;
+        if (worldToScreen(a, sa) && worldToScreen(b, sb))
+            dl->AddLine(sa, sb, col, thick);
+    };
+
+    auto view = m_Registry.view<Transform, ReflectionProbeComponent>();
+    for (auto entity : view)
+    {
+        if (m_Registry.any_of<EntityFlags>(entity) &&
+            !m_Registry.get<EntityFlags>(entity).Enabled)
+            continue;
+
+        const bool selected = (m_SelectedEntity == entity) ||
+                              (m_SelectedEntities.count(entity) > 0);
+
+        const auto& tr = view.get<Transform>(entity);
+        const auto& rp = view.get<ReflectionProbeComponent>(entity);
+
+        const glm::vec3 c = tr.Position;
+        const glm::vec3 e = rp.BoxExtents;
+
+        // 8 corners
+        glm::vec3 corners[8] = {
+            {c.x - e.x, c.y - e.y, c.z - e.z},
+            {c.x + e.x, c.y - e.y, c.z - e.z},
+            {c.x + e.x, c.y + e.y, c.z - e.z},
+            {c.x - e.x, c.y + e.y, c.z - e.z},
+            {c.x - e.x, c.y - e.y, c.z + e.z},
+            {c.x + e.x, c.y - e.y, c.z + e.z},
+            {c.x + e.x, c.y + e.y, c.z + e.z},
+            {c.x - e.x, c.y + e.y, c.z + e.z}
+        };
+
+        // Edges
+        const int edges[12][2] = {
+            {0,1},{1,2},{2,3},{3,0},
+            {4,5},{5,6},{6,7},{7,4},
+            {0,4},{1,5},{2,6},{3,7}
+        };
+
+        const ImU32 col = selected
+            ? IM_COL32(255, 200, 80, 255)     // тёплый жёлтый
+            : IM_COL32(255, 200, 80, 100);
+        const float thick = selected ? 2.0f : 1.0f;
+
+        for (int i = 0; i < 12; ++i)
+            drawLine3D(corners[edges[i][0]], corners[edges[i][1]], col, thick);
+    }
 }
 
 void EditorUI::CreateLightEntity(LightType type)

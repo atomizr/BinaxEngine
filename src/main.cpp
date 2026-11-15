@@ -49,6 +49,8 @@
 #include "Serialization/PostProcessSerializer.h"
 #include "Utils/AssetPaths.h"
 #include "Reflect/EngineReflection.h"
+#include "ECS/Components/ReflectionProbeComponent.h"
+#include "Renderer/ReflectionProbeLibrary.h"
 
 #ifdef _WIN32
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -356,6 +358,67 @@ int main()
         EnsureSkyboxExists(registry);
         EnsurePostProcessCfgExists(registry);
 
+                EnsureSkyboxExists(registry);
+        EnsurePostProcessCfgExists(registry);
+
+        // ---- Rebuild reflection probe library ----------------------------
+        {
+            auto& lib = Binax::ReflectionProbeLibrary::Get();
+            lib.Clear();
+
+            auto view = registry.view<Binax::ReflectionProbeComponent>();
+
+            // Первая проба задаёт resolution
+            uint32_t firstRes = 256;
+            bool haveFirst = false;
+            for (auto e : view)
+            {
+                if (!haveFirst)
+                {
+                    firstRes = view.get<Binax::ReflectionProbeComponent>(e).Resolution;
+                    if (firstRes == 0) firstRes = 256;
+                    haveFirst = true;
+                }
+            }
+
+            for (auto e : view)
+            {
+                auto& rp = view.get<Binax::ReflectionProbeComponent>(e);
+                rp.Resolution = firstRes;
+                rp.ProbeIndex = lib.Create(firstRes);
+                rp.NeedsBake  = true;   // по умолчанию — при загрузке файла сбросится
+            }
+
+            // Попробовать загрузить baked-файл — если совпадает с ожидаемым
+            const std::string bakePath =
+                Binax::Paths::Resolve("resources/reflection_bakes.bxbake");
+
+            // Посчитать ожидаемое количество проб
+            uint32_t expectedProbes = 0;
+            for (auto e : view) { (void)e; ++expectedProbes; }
+
+            if (haveFirst && lib.GetCount() > 0)
+            {
+                if (lib.LoadFromFile(bakePath))
+                {
+                    if (lib.GetResolution() == firstRes &&
+                        lib.GetCount()     == expectedProbes)
+                    {
+                        for (auto e : view)
+                            view.get<Binax::ReflectionProbeComponent>(e).NeedsBake = false;
+
+                        BINAX_LOG_INFO("Reflection probes restored from bake file");
+                    }
+                    else
+                    {
+                        // Файл есть, но не совпадает — нужно re-bake
+                        lib.RecreateAtResolution(firstRes);
+                        BINAX_LOG_INFO("Bake file mismatch, will re-bake");
+                    }
+                }
+            }
+        }
+
         Binax::Viewport viewport(props.Width, props.Height);
         Binax::EditorCamera editorCamera(viewport.GetAspect());
         Binax::EditorUI editorUI(window.GetGLFWWindow(), registry);
@@ -591,12 +654,62 @@ int main()
             collectedLights.clear();
             Binax::RenderSystem::CollectLights(registry, collectedLights);
 
+            // ---- Skybox & PostProcess settings (нужны для shadow и bake) ------
+            Binax::SkyboxParams skyboxParams = GatherSkyboxParams(registry);
+            const Binax::PostProcessSettings postSettings =
+                GatherPostProcessSettings(registry);
+
             // ---- Shadow pass (получает уже заполненный список светов) --------
             renderer.RenderShadowPass(frameData,
                                       editorCamera.GetViewMatrix(),
                                       editorCamera.GetProjectionMatrix(),
                                       collectedLights,
                                       shadowSettings);
+
+            // ---- Bake reflection probes --------------------------------------
+            {
+                static float probeTimer = 0.0f;
+                probeTimer += delta;
+
+                auto probeView = registry.view<Binax::Transform,
+                                               Binax::ReflectionProbeComponent>();
+                for (auto pe : probeView)
+                {
+                    auto& rpc = probeView.get<Binax::ReflectionProbeComponent>(pe);
+                    const auto& ptr = probeView.get<Binax::Transform>(pe);
+
+                    bool shouldBake = rpc.NeedsBake ||
+                        (rpc.Realtime && probeTimer >= 1.0f);
+
+                    if (shouldBake && rpc.ProbeIndex > 0)
+                    {
+                        renderer.BakeReflectionProbe(
+                            rpc.ProbeIndex,
+                            ptr.Position,
+                            rpc.BoxExtents,
+                            frameData,
+                            collectedLights,
+                            skyboxParams,
+                            rpc.ReflectSkybox);
+                        rpc.NeedsBake = false;
+                    }
+                }
+
+                if (probeTimer >= 1.0f)
+                    probeTimer = 0.0f;
+
+                // Save to disk если пользователь нажал "Bake + Save"
+                if (editorUI.ConsumePendingSaveProbes())
+                {
+                    const std::string bakePath =
+                        Binax::Paths::Resolve("resources/reflection_bakes.bxbake");
+
+                    if (Binax::ReflectionProbeLibrary::Get().SaveToFile(bakePath))
+                        BINAX_LOG_INFO("Baked reflections saved to '{}'", bakePath);
+                    else
+                        BINAX_LOG_WARN("Failed to save baked reflections");
+                }
+            }
 
             // ---- Geometry pass (один раз!) -----------------------------------
             renderer.GeometryPass(frameData,
@@ -615,11 +728,6 @@ int main()
                     (uint32_t)viewport.GetSize().x,
                     (uint32_t)viewport.GetSize().y);
             }
-
-            Binax::SkyboxParams skyboxParams = GatherSkyboxParams(registry);
-
-            const Binax::PostProcessSettings postSettings =
-                GatherPostProcessSettings(registry);
 
             renderer.LightingPass(collectedLights,
                                   editorCamera.GetPosition(),
@@ -656,6 +764,19 @@ int main()
         Binax::InstanceBuffer::Get().Clear();
         Binax::AssetRegistry::Get().Clear();
         Binax::MaterialLibrary::Get().Clear();
+
+        // Автосохранение baked-проб при выходе — ДО Clear()
+        {
+            auto& lib = Binax::ReflectionProbeLibrary::Get();
+            if (lib.GetCount() > 0)
+            {
+                const std::string bakePath =
+                    Binax::Paths::Resolve("resources/reflection_bakes.bxbake");
+                lib.SaveToFile(bakePath);
+            }
+            lib.Clear();
+        }
+
         Binax::MeshLibrary::Get().Clear();
 
         iam_clip_shutdown();

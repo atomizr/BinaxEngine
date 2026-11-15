@@ -195,6 +195,13 @@ public:
                                 const glm::mat4& projectionMatrix,
                                 const std::vector<GPULight>& lights,
                                 const SkyboxParams& skybox = {});
+    void BakeReflectionProbe(uint32_t probeIdx,
+                             const glm::vec3& probePos,
+                             const glm::vec3& probeExtents,
+                             const FrameRenderData& frame,
+                             const std::vector<GPULight>& lights,
+                             const SkyboxParams& skybox,
+                             bool reflectSkybox);
 
 private:
     static constexpr uint32_t kCullGroupSize = 64;
@@ -381,6 +388,7 @@ private:
                            const std::vector<GPULight>& lights,
                            const PostProcessSettings& post,
                            float timeSeconds);
+    std::unique_ptr<Shader> m_ProbeSkyboxShader;
 
 };
 

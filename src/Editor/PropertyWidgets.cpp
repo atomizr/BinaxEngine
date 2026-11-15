@@ -354,6 +354,9 @@ bool PropertyWidgets::IsFileBrowserOpen()
 
 bool PropertyWidgets::Draw(void* obj, const PropertyInfo& prop)
 {
+    if (prop.VisibleWhen && !prop.VisibleWhen(obj))
+        return false;
+
     if (prop.ReadOnly) ImGui::BeginDisabled();
 
     bool changed = false;

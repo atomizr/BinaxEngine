@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <vector>
+#include <limits>
 
 #include <glad/glad.h>
 
@@ -23,6 +24,7 @@
 #include "ECS/Components/MaterialComponent.h"
 #include "ECS/Components/LightComponent.h"
 #include "ECS/Components/EntityFlags.h"
+#include "ECS/Components/ReflectionProbeComponent.h"
 
 namespace Binax {
 
@@ -32,8 +34,14 @@ struct FrameRenderData
     std::vector<entt::entity>         InstanceEntities;
     std::vector<DrawElementsIndirect> Draws;
     std::vector<uint32_t>             DrawVertexCounts;
-
-    // ---- Transparent (forward pass) -------------------------------------
+        struct ReflectionProbeEntry
+    {
+        glm::vec3 Position;
+        glm::vec3 Extents;
+        uint32_t  ProbeIndex;
+        bool      BoxProjection;
+    };
+    std::vector<ReflectionProbeEntry> ReflectionProbes;
     struct TransparentInstance
     {
         entt::entity Entity       = entt::null;
@@ -52,6 +60,7 @@ public:
         out.InstanceEntities.clear();
         out.Draws.clear();
         out.DrawVertexCounts.clear();
+        out.ReflectionProbes.clear();
         out.TransparentInstances.clear();
 
         struct Candidate
@@ -70,6 +79,54 @@ public:
 
         const MaterialHandle fallbackMat =
             MaterialLibrary::Get().GetOrCreateDefault();
+
+                // ---- Collect reflection probes ---------------------------------
+        struct ProbeLookup {
+            glm::vec3 Position;
+            glm::vec3 Extents;
+            uint32_t  ProbeIndex;
+            bool      BoxProjection;
+        };
+        std::vector<ProbeLookup> probes;
+        {
+            auto pv = registry.view<Transform, ReflectionProbeComponent>();
+            probes.reserve(pv.size_hint());
+            for (auto pe : pv)
+            {
+                const auto& pc = pv.get<ReflectionProbeComponent>(pe);
+                const auto& pt = pv.get<Transform>(pe);
+                if (pc.ProbeIndex == 0) continue;
+
+                probes.push_back({ pt.Position, pc.BoxExtents,
+                                   pc.ProbeIndex, pc.BoxProjection });
+
+                out.ReflectionProbes.push_back({
+                    pt.Position, pc.BoxExtents, pc.ProbeIndex, pc.BoxProjection
+                });
+            }
+        }
+
+        auto findProbeFor = [&](const glm::vec3& worldPos) -> uint32_t
+        {
+            uint32_t best = 0;
+            float    bestDist = std::numeric_limits<float>::max();
+            for (const auto& p : probes)
+            {
+                glm::vec3 d = worldPos - p.Position;
+                if (std::abs(d.x) <= p.Extents.x &&
+                    std::abs(d.y) <= p.Extents.y &&
+                    std::abs(d.z) <= p.Extents.z)
+                {
+                    float dist = glm::length(d);
+                    if (dist < bestDist)
+                    {
+                        bestDist = dist;
+                        best = p.ProbeIndex;
+                    }
+                }
+            }
+            return best;
+        };
 
         for (auto e : view)
         {
@@ -107,6 +164,8 @@ public:
                 MaterialLibrary::Get().GetBlendMode(mat);
             if (bm == MaterialBlendMode::Transparent)
             {
+                const uint32_t probeId = findProbeFor(glm::vec3(model[3]));
+
                 InstanceGPU g{};
                 g.Model        = model;
                 g.PrevModel    = prevModel;
@@ -114,7 +173,7 @@ public:
                 g.MaterialId   = mat;
                 g.MeshId       = mc.MeshId;
                 g.BoneOffset   = 0;
-                g.Flags        = InstanceFlags::None;
+                g.Flags        = InstanceFlags::None | (probeId << 16);
 
                 FrameRenderData::TransparentInstance ti;
                 ti.Entity = e;
@@ -145,6 +204,8 @@ public:
 
             for (size_t k = i; k < j; ++k)
             {
+                const uint32_t probeId = findProbeFor(glm::vec3(cands[k].Model[3]));
+
                 InstanceGPU g{};
                 g.Model        = cands[k].Model;
                 g.PrevModel    = cands[k].PrevModel;
@@ -152,7 +213,7 @@ public:
                 g.MaterialId   = cands[k].Material;
                 g.MeshId       = meshId;
                 g.BoneOffset   = 0;
-                g.Flags        = InstanceFlags::None;
+                g.Flags        = InstanceFlags::None | (probeId << 16);
                 out.Instances.push_back(g);
                 out.InstanceEntities.push_back(cands[k].Entity);
             }

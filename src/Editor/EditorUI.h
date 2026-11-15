@@ -18,6 +18,7 @@
 #include "Renderer/ShadowSettings.h"
 #include "ECS/Components/EntityFlags.h"
 #include "ECS/Components/LightComponent.h"
+#include "ECS/Components/ReflectionProbeComponent.h"
 
 struct GLFWwindow;
 
@@ -65,6 +66,12 @@ public:
     const std::unordered_set<entt::entity>& GetSelectedEntities() const
     {
         return m_SelectedEntities;
+    }
+        bool ConsumePendingSaveProbes()
+    {
+        const bool v = m_PendingSaveProbes;
+        m_PendingSaveProbes = false;
+        return v;
     }
 
 private:
@@ -178,6 +185,9 @@ private:
     ShadowSettings* m_ShadowSettings = nullptr;
     bool m_ShowShadowSettings = false;
     void DrawShadowSettingsWindow();
+    void CreateReflectionProbeEntity();
+    void DrawReflectionProbeGizmos();
+    bool m_PendingSaveProbes = false;
 };
 
 }

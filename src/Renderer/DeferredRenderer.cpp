@@ -3,6 +3,7 @@
 #include "Renderer/Mesh.h"
 #include "Renderer/MeshLibrary.h"
 #include "Renderer/InstanceBuffer.h"
+#include "Renderer/ReflectionProbeLibrary.h"
 #include "Utils/Log.h"
 #include "Utils/Paths.h"
 #include "Utils/Frustum.h"
@@ -320,6 +321,9 @@ void DeferredRenderer::InitShaders()
     m_VolumetricFogShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "volumetric_fog.frag"));
     m_VolumetricFogBlurShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "volumetric_fog_blur.frag"));
     m_VolumetricFogCompositeShader = Shader::FromFiles(lightingVert, Paths::Resolve(dir + "volumetric_fog_composite.frag"));
+        m_ProbeSkyboxShader = Shader::FromFiles(
+        Paths::Resolve(dir + "lighting.vert"),
+        Paths::Resolve(dir + "probe_skybox.frag"));
 
     const std::string cullPath = Paths::Resolve(dir + "frustum_cull.comp");
     try
@@ -1135,6 +1139,38 @@ void DeferredRenderer::LightingPass(
         m_LightingShader->SetInt("u_PointShadowMap", 8);
     }
 
+    // ---- Reflection probes (MUST be set BEFORE DrawFullscreenQuad) ----
+    {
+        auto& lib = ReflectionProbeLibrary::Get();
+        if (lib.GetCount() > 0)
+        {
+            lib.BindTextureArray(10);
+            m_LightingShader->SetInt("u_ProbeCubeArray", 10);
+            m_LightingShader->SetInt("u_ProbeCount", (int)lib.GetCount());
+
+            int pIdx = 0;
+            for (const auto& p : frameData.ReflectionProbes)
+            {
+                if (pIdx >= 4) break;
+                std::string pn = "u_ProbePos["         + std::to_string(pIdx) + "]";
+                std::string en = "u_ProbeExtents["     + std::to_string(pIdx) + "]";
+                std::string bn = "u_ProbeBoxProjection[" + std::to_string(pIdx) + "]";
+                m_LightingShader->SetVec3(pn, p.Position);
+                m_LightingShader->SetVec3(en, p.Extents);
+                m_LightingShader->SetInt (bn, p.BoxProjection ? 1 : 0);
+                ++pIdx;
+            }
+        }
+        else
+        {
+            m_LightingShader->SetInt("u_ProbeCount", 0);
+        }
+    }
+
+    // Debug: 0=off, 1=probeIdx, 2=raw probe, 3=reflections contribution.
+    m_LightingShader->SetInt("u_DebugReflections", 0);   // ← временно 1 для теста
+
+    // ---- THE DRAW — все uniform'ы применены ---------------------------
     DrawFullscreenQuad();
 
     if (skybox.CubemapPtr && skybox.CubemapPtr->GetID())
@@ -1143,13 +1179,12 @@ void DeferredRenderer::LightingPass(
     m_LightingShader->Unbind();
     m_HDRFBO->Unbind();
 
-    // ---- Transparent forward pass --------------------------------------
+    // ---- Transparent forward pass -------------------------------------
     ForwardTransparentPass(frameData, cameraPosition,
                            viewMatrix, projectionMatrix,
                            lights, skybox);
 
-        // ---- Volumetric Fog / God Rays -------------------------------------
-    // ---- Volumetric Fog / God Rays -------------------------------------
+    // ---- Volumetric Fog / God Rays ------------------------------------
     if (post.Enabled && post.VolumetricFogEnabled)
         VolumetricFogPass(viewMatrix, projectionMatrix, cameraPosition,
                           lights, post, timeSeconds);
@@ -1451,6 +1486,176 @@ void DeferredRenderer::ApplyTonemap(uint32_t sourceTexture, uint32_t targetFBO,
     glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void DeferredRenderer::BakeReflectionProbe(
+    uint32_t probeIdx,
+    const glm::vec3& probePos,
+    const glm::vec3& probeExtents,
+    const FrameRenderData& frame,
+    const std::vector<GPULight>& lights,
+    const SkyboxParams& skybox,
+    bool reflectSkybox)
+{
+    auto& lib = ReflectionProbeLibrary::Get();
+    if (probeIdx == 0 || probeIdx > lib.GetCount())
+    {
+        BINAX_LOG_WARN("BakeReflectionProbe: invalid slot {} (max {})",
+                       probeIdx, lib.GetCount());
+        return;
+    }
+    if (!m_ForwardShader || !m_ProbeSkyboxShader)
+    {
+        BINAX_LOG_ERROR("BakeReflectionProbe: shader missing");
+        return;
+    }
+
+    BINAX_LOG_INFO("BakeReflectionProbe: slot {} at ({:.2f}, {:.2f}, {:.2f}) "
+                   "extents ({:.2f}, {:.2f}, {:.2f}), {} instances, skybox={}",
+                   probeIdx,
+                   probePos.x, probePos.y, probePos.z,
+                   probeExtents.x, probeExtents.y, probeExtents.z,
+                   frame.Instances.size(), reflectSkybox);
+
+    // Upload instances + material SSBO (opaque only — transparent не нужны)
+    InstanceBuffer::Get().Upload(frame.Instances);
+    MaterialLibrary::Get().Flush();
+
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, InstanceBuffer::Get().GetSSBO());
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, MaterialLibrary::Get().GetMaterialSSBO());
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_BonesDummySSBO);
+
+    // Save GL state
+    GLfloat prevClear[4]; glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClear);
+
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+
+    // ВАЖНО: culling ON — иначе проба внутри геометрии видит
+    // backfaces (сплошной цвет) вместо того, что снаружи
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CCW);
+
+    static const glm::vec3 kDirs[6] = {
+        { 1, 0, 0}, {-1, 0, 0},
+        { 0, 1, 0}, { 0,-1, 0},
+        { 0, 0, 1}, { 0, 0,-1}
+    };
+    static const glm::vec3 kUps[6] = {
+        {0,-1, 0}, {0,-1, 0},
+        {0, 0, 1}, {0, 0,-1},
+        {0,-1, 0}, {0,-1, 0}
+    };
+
+    const float farPlane = glm::length(probeExtents) * 4.0f + 100.0f;
+    const glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, farPlane);
+
+    const int lightCount = (int)std::min<size_t>(lights.size(), (size_t)kMaxLights);
+    const auto& N = GetLightUniformNames();
+
+    for (int f = 0; f < 6; ++f)
+    {
+        if (!lib.BindCubeFace(probeIdx, (uint32_t)f))
+        {
+            BINAX_LOG_WARN("BakeReflectionProbe: bind face {} failed", f);
+            break;
+        }
+
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        const glm::mat4 view = glm::lookAt(probePos, probePos + kDirs[f], kUps[f]);
+
+        // ---- Skybox background -----------------------------------------
+        if (reflectSkybox && skybox.CubemapPtr && skybox.CubemapPtr->GetID())
+        {
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+
+            skybox.CubemapPtr->Bind(0);
+            m_ProbeSkyboxShader->Bind();
+            m_ProbeSkyboxShader->SetInt  ("u_EnvironmentMap", 0);
+            m_ProbeSkyboxShader->SetInt  ("u_HasEnvironment", 1);
+            m_ProbeSkyboxShader->SetMat4 ("u_InvViewProj", glm::inverse(proj * view));
+            m_ProbeSkyboxShader->SetVec3 ("u_ProbePos", probePos);
+            m_ProbeSkyboxShader->SetFloat("u_SkyboxRotation", skybox.RotationRadians);
+            m_ProbeSkyboxShader->SetFloat("u_SkyboxBrightness", skybox.Brightness);
+            DrawFullscreenQuad();
+            m_ProbeSkyboxShader->Unbind();
+            skybox.CubemapPtr->Unbind(0);
+
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(GL_TRUE);
+        }
+
+        // ---- Geometry (forward PBR) ------------------------------------
+        m_ForwardShader->Bind();
+        m_ForwardShader->SetMat4("u_View",          view);
+        m_ForwardShader->SetMat4("u_Projection",    proj);
+        m_ForwardShader->SetVec3("u_CameraPosition", probePos);
+
+        if (skybox.CubemapPtr && skybox.CubemapPtr->GetID())
+        {
+            skybox.CubemapPtr->Bind(4);
+            m_ForwardShader->SetInt  ("u_EnvironmentMap",    4);
+            m_ForwardShader->SetInt  ("u_HasEnvironment",    1);
+            m_ForwardShader->SetFloat("u_SkyboxRotation",    skybox.RotationRadians);
+            m_ForwardShader->SetFloat("u_SkyboxBrightness",  skybox.Brightness);
+        }
+        else m_ForwardShader->SetInt("u_HasEnvironment", 0);
+
+        m_ForwardShader->SetInt("u_LightCount", lightCount);
+        for (int i = 0; i < lightCount; ++i)
+        {
+            const auto& L = lights[i];
+            const auto& n = N[i];
+            m_ForwardShader->SetVec3 (n.Position, L.Position);
+            m_ForwardShader->SetFloat(n.Range, L.Range);
+            m_ForwardShader->SetVec3 (n.Direction, L.Direction);
+            m_ForwardShader->SetFloat(n.Intensity, L.Intensity);
+            m_ForwardShader->SetVec3 (n.Color, L.Color);
+            m_ForwardShader->SetInt  (n.LightType, L.LightType);
+            m_ForwardShader->SetFloat(n.InnerCutoff, L.InnerCutoff);
+            m_ForwardShader->SetFloat(n.OuterCutoff, L.OuterCutoff);
+            m_ForwardShader->SetInt  (n.ShadowMode,      L.ShadowMode);
+            m_ForwardShader->SetFloat(n.ShadowStrength,  L.ShadowStrength);
+            m_ForwardShader->SetFloat(n.BiasMultiplier,  L.BiasMultiplier);
+            m_ForwardShader->SetInt  (n.ShadowSlot,      L.ShadowSlot);
+        }
+
+        MeshLibrary::Get().BindVAO();
+        for (size_t i = 0; i < frame.Instances.size(); ++i)
+        {
+            const InstanceGPU& inst = frame.Instances[i];
+            if (!MeshLibrary::Get().IsValid(inst.MeshId)) continue;
+            const MeshGPU& mesh = MeshLibrary::Get().Get(inst.MeshId);
+            if (mesh.IndexCount == 0) continue;
+
+            m_ForwardShader->SetUInt("u_InstanceIndex", (uint32_t)i);
+            const void* indexOffset =
+                (const void*)(uintptr_t)(mesh.BaseIndex * sizeof(uint32_t));
+            glDrawElementsBaseVertex(GL_TRIANGLES,
+                                     (GLsizei)mesh.IndexCount,
+                                     GL_UNSIGNED_INT,
+                                     indexOffset,
+                                     (GLint)mesh.BaseVertex);
+        }
+        glBindVertexArray(0);
+
+        if (skybox.CubemapPtr && skybox.CubemapPtr->GetID())
+            skybox.CubemapPtr->Unbind(4);
+
+        m_ForwardShader->Unbind();
+    }
+
+    lib.Unbind();
+    lib.GenerateMipmaps();
+    BINAX_LOG_INFO("BakeReflectionProbe: slot {} baked OK", probeIdx);
+
+    glClearColor(prevClear[0], prevClear[1], prevClear[2], prevClear[3]);
 }
 
 void DeferredRenderer::EnsureVolumetricFogTargets(uint32_t width, uint32_t height)
@@ -2078,6 +2283,7 @@ void DeferredRenderer::RenderOutlinePass(const FrameRenderData& frame,
 
     // Возвращаем глобальный clear-color — иначе главный framebuffer
     // будет очищаться прозрачным чёрным, а не 0.08/0.08/0.10 из main.cpp
+        glDisable(GL_CULL_FACE);
     glClearColor(prevClearColor[0], prevClearColor[1],
                  prevClearColor[2], prevClearColor[3]);
 
@@ -2116,6 +2322,7 @@ void DeferredRenderer::ReloadShaders()
     reloadSafe(m_VolumetricFogBlurShader);
     reloadSafe(m_VolumetricFogCompositeShader);
     reloadSafe(m_ForwardShader);
+    reloadSafe(m_ProbeSkyboxShader);
 
     BINAX_LOG_INFO("Shaders reloaded from disk");
 }

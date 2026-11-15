@@ -11,6 +11,7 @@
 #include "ECS/Components/SkyboxComponent.h"
 #include "ECS/Components/PostProcessComponent.h"
 #include "ECS/Components/EntityFlags.h"
+#include "ECS/Components/ReflectionProbeComponent.h"
 
 using namespace Binax;
 
@@ -131,6 +132,27 @@ BINAX_REFLECT(Binax::EntityFlags)
 BINAX_REFLECT(Binax::NameComponent)
 {
     info.Add(&NameComponent::Name, "Name", PropertyKind::String);
+}
+
+BINAX_REFLECT(Binax::ReflectionProbeComponent)
+{
+    info.Add(&ReflectionProbeComponent::BoxExtents,    "Box Extents",    PropertyKind::Vec3)
+        .SetSpeed(0.1f);
+    info.Add(&ReflectionProbeComponent::Realtime,      "Realtime",       PropertyKind::Bool);
+    info.Add(&ReflectionProbeComponent::BoxProjection, "Box Projection", PropertyKind::Bool);
+    info.Add(&ReflectionProbeComponent::ReflectSkybox, "Reflect Skybox", PropertyKind::Bool);
+    info.Add(&ReflectionProbeComponent::Resolution, "Resolution", PropertyKind::Enum)
+        .SetEnums({
+            { 128,  "128"  },
+            { 256,  "256"  },
+            { 512,  "512"  },
+            { 1024, "1024" }
+        })
+        .SetVisibleWhen([](const void*) { return false; });
+    info.Add(&ReflectionProbeComponent::ProbeIndex, "Probe Index", PropertyKind::UInt)
+        .SetReadOnly().SetTransient();
+    info.Add(&ReflectionProbeComponent::NeedsBake, "Needs Bake", PropertyKind::Bool)
+        .SetReadOnly().SetTransient();
 }
 
 BINAX_REFLECT(Binax::PostProcessComponent)
@@ -267,6 +289,7 @@ void RegisterEngineComponents()
     cr.Register<EditorCameraComponent> ("EditorCameraComponent", true,  true);
     cr.Register<SkyboxComponent>       ("Skybox");
     cr.Register<PostProcessComponent>  ("Post Processing");
+    cr.Register<ReflectionProbeComponent>("Reflection Probe");
 }
 
 }

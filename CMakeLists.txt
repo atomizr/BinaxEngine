@@ -47,6 +47,7 @@ set(SOURCES
     src/Renderer/ShadowSettings.cpp
     src/Renderer/ShadowMap.cpp
     src/Renderer/ShadowCubemap.cpp
+    src/Renderer/ReflectionProbeLibrary.cpp
 
     src/Editor/EditorUI.cpp
     src/Editor/EditorCamera.cpp
