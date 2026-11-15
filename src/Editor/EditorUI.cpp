@@ -150,7 +150,7 @@ void EditorUI::AddComponentToEntity(entt::entity entity, const std::string& comp
     entry->AddDefault(m_Registry, entity);
     BINAX_LOG_INFO("Added '{}' to entity {}", componentName, (uint32_t)entity);
     Notify(ImGuiToastType_Success, 2000, "Added '%s'", componentName.c_str());
-
+    InvalidateHierarchyCache();
     RecordUndo();
 }
 
@@ -185,6 +185,7 @@ void EditorUI::RemoveComponentFromEntity(entt::entity entity, const std::string&
     entry->Remove(m_Registry, entity);
     BINAX_LOG_INFO("Removed '{}' from entity {}", componentName, (uint32_t)entity);
     Notify(ImGuiToastType_Info, 2000, "Removed '%s'", componentName.c_str());
+    InvalidateHierarchyCache();
 
     RecordUndo();
 }
@@ -249,12 +250,16 @@ void EditorUI::LoadScene()
         return;
     }
 
+    // FIX #13: снимок библиотеки — если десериализация сцены упадёт,
+    // откатываем к прежнему состоянию, чтобы не остаться с «новыми»
+    // материалами и «старыми» сущностями.
+    auto materialSnapshot = MaterialLibrary::Get().TakeSnapshot();
+
     {
         const uint32_t loaded =
             MaterialSerializer::LoadAll(MaterialLibrary::Get(), materialDir);
         if (loaded == 0)
         {
-            // FIX #35: пользователь должен знать, что материалы не загрузились
             BINAX_LOG_WARN("No materials loaded from '{}'", materialDir);
             Notify(ImGuiToastType_Warning, 3500,
                    "No materials loaded — check '%s'",
@@ -264,7 +269,9 @@ void EditorUI::LoadScene()
 
     if (!SceneSerializer::Deserialize(m_Registry, levelPath))
     {
-        BINAX_LOG_WARN("Level load failed — the registry may be partially updated");
+        BINAX_LOG_WARN("Level load failed — rolling back materials");
+        MaterialLibrary::Get().RestoreSnapshot(std::move(materialSnapshot));
+        MaterialLibrary::Get().Flush();
         Notify(ImGuiToastType_Error, 3500, "Failed to load level");
         return;
     }
@@ -298,12 +305,11 @@ void EditorUI::LoadScene()
 
     BINAX_LOG_INFO("Level loaded");
 
-    RebuildReflectionProbeLibrary();      // ← FIX #3
-    MarkCameraTeleported();               // ← FIX #5
+    RebuildReflectionProbeLibrary();
+    MarkCameraTeleported();
+    InvalidateHierarchyCache();          // ← FIX #63
 
-    // FIX #34: после успешной загрузки нечего «терять» — сцена чистая
     m_HasUnsavedChanges = false;
-
     ResetUndo();
     Notify(ImGuiToastType_Success, 3000, "Level loaded");
 }
@@ -358,6 +364,7 @@ void EditorUI::DeleteEntity(entt::entity entity)
     BINAX_LOG_INFO("Entity {0} destroyed (with subtree: {1} entities)",
                    (uint32_t)entity, destroyed);
     Notify(ImGuiToastType_Info, 2500, "Deleted '%s'", name.c_str());
+    InvalidateHierarchyCache();
 
     RecordUndo();
 }
@@ -470,6 +477,7 @@ void EditorUI::SetParent(entt::entity child, entt::entity parent)
                    GetEntityName(child),
                    (parent == entt::null) ? std::string("<root>") : GetEntityName(parent));
     Notify(ImGuiToastType_Info, 2000, "Reparented");
+    InvalidateHierarchyCache();
 
     RecordUndo();
 }
@@ -1305,6 +1313,7 @@ void EditorUI::DrawGizmo()
     else if (m_GizmoWasUsing)
     {
         m_GizmoWasUsing = false;
+        InvalidateHierarchyCache();
         RecordUndo();
     }
 }
@@ -1455,27 +1464,13 @@ void EditorUI::DrawHierarchy()
     }
     else
     {
-        std::unordered_map<entt::entity, std::vector<entt::entity>> children;
-        std::vector<entt::entity> roots;
-
-        for (auto entity : m_Registry.view<NameComponent>())
-        {
-            const auto* pc = m_Registry.try_get<ParentComponent>(entity);
-            if (pc && pc->Parent != entt::null && pc->Parent != entity &&
-                m_Registry.valid(pc->Parent) &&
-                m_Registry.any_of<NameComponent>(pc->Parent))
-            {
-                children[pc->Parent].push_back(entity);
-            }
-            else
-            {
-                roots.push_back(entity);
-            }
-        }
+        // FIX #63: используем кэш вместо перестройки каждый кадр
+        if (m_HierarchyDirty)
+            RebuildHierarchyCache();
 
         std::unordered_set<entt::entity> visited;
-        for (auto entity : roots)
-            DrawEntityRow(entity, children, visited);
+        for (auto entity : m_HierarchyRootsCache)
+            DrawEntityRow(entity, m_HierarchyCache, visited);
 
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         ImGui::Dummy(ImVec2(avail.x > 1.0f ? avail.x : 1.0f, 28.0f));
@@ -1504,6 +1499,37 @@ void EditorUI::DrawHierarchy()
     }
 
     ImGui::End();
+}
+
+void EditorUI::RebuildHierarchyCache()
+{
+    // FIX #63: строим карту parents→children один раз, а не на каждый кадр.
+    m_HierarchyCache.clear();
+    m_HierarchyRootsCache.clear();
+
+    auto view = m_Registry.view<NameComponent>();
+
+    // FIX: убрали view.size_hint() — в текущей версии entt метод
+    // отсутствует для single-storage basic_view. reserve() был только
+    // perf-хинтом, без него контейнеры растут амортизированно.
+    // Альтернатива при желании: m_Registry.storage<entt::entity>().size()
+
+    for (auto entity : view)
+    {
+        const auto* pc = m_Registry.try_get<ParentComponent>(entity);
+        if (pc && pc->Parent != entt::null && pc->Parent != entity &&
+            m_Registry.valid(pc->Parent) &&
+            m_Registry.any_of<NameComponent>(pc->Parent))
+        {
+            m_HierarchyCache[pc->Parent].push_back(entity);
+        }
+        else
+        {
+            m_HierarchyRootsCache.push_back(entity);
+        }
+    }
+
+    m_HierarchyDirty = false;
 }
 
 void EditorUI::DrawEntityRow(
@@ -1641,6 +1667,7 @@ void EditorUI::DrawInspector()
         ImGui::PopID();
 
         if (flagsChanged)
+        InvalidateHierarchyCache();
             RecordUndo();
 
         ImGui::Separator();
@@ -1804,6 +1831,7 @@ void EditorUI::DrawInspector()
                     lib.SetShaderType(mc.MaterialId,
                         static_cast<MaterialShaderType>(curIdx));
                     lib.Flush();
+                    InvalidateHierarchyCache();
                     RecordUndo();
                 }
                 if (ImGui::IsItemHovered())
@@ -1844,6 +1872,7 @@ void EditorUI::DrawInspector()
                     if (ImGui::Selectable(label.c_str(), selected))
                     {
                         mc.MaterialId = i;
+                        InvalidateHierarchyCache();
                         RecordUndo();
                     }
                     if (selected)
@@ -1877,6 +1906,7 @@ void EditorUI::DrawInspector()
                                    newName, (uint32_t)m_SelectedEntity);
                     Notify(ImGuiToastType_Info, 2000,
                            "Material cloned as '%s'", newName.c_str());
+                           InvalidateHierarchyCache();
                     RecordUndo();
                 }
 
@@ -1910,6 +1940,7 @@ void EditorUI::DrawInspector()
     if (m_InspectorPendingRec && !ImGui::IsAnyItemActive())
     {
         m_InspectorPendingRec = false;
+        InvalidateHierarchyCache();
         RecordUndo();
     }
 
@@ -2210,6 +2241,7 @@ void EditorUI::CreateEmptyEntity()
     BINAX_LOG_INFO("Created empty entity {0}", (uint32_t)entity);
     Notify(ImGuiToastType_Info, 2000, "Empty entity created");
 
+    InvalidateHierarchyCache();
     RecordUndo();
 }
 
@@ -2284,6 +2316,7 @@ void EditorUI::CreateCubeEntity()
     BINAX_LOG_INFO("Created cube entity {0} at ({1:.2f}, 0, {2:.2f})",
                    (uint32_t)entity, offsetX, offsetZ);
     Notify(ImGuiToastType_Success, 2000, "Cube created");
+    InvalidateHierarchyCache();
 
     RecordUndo();
 }
@@ -2357,6 +2390,7 @@ void EditorUI::CreateReflectionProbeEntity()
     BINAX_LOG_INFO("Created reflection probe entity {} (slot {})",
                    (uint32_t)entity, rp.ProbeIndex);
     Notify(ImGuiToastType_Success, 2000, "Reflection Probe created");
+    InvalidateHierarchyCache();
     RecordUndo();
 }
 
@@ -2487,6 +2521,7 @@ void EditorUI::CreateLightEntity(LightType type)
 
     BINAX_LOG_INFO("Created {} entity {}", baseName, (uint32_t)entity);
     Notify(ImGuiToastType_Success, 2000, "%s created", baseName.c_str());
+    InvalidateHierarchyCache();
 
     RecordUndo();
 }
@@ -2875,6 +2910,7 @@ void EditorUI::ExecutePendingImport()
     SelectOnly(firstEntity);
     FocusOnSelection();
 
+    InvalidateHierarchyCache();
     RecordUndo();
     m_PendingImport = {};
 }
@@ -2940,6 +2976,7 @@ void EditorUI::DuplicateEntity(entt::entity entity)
     BINAX_LOG_INFO("Duplicated '{0}' with {1} entities",
                    GetEntityName(entity), remap.size());
     Notify(ImGuiToastType_Success, 2000, "Duplicated '%s'", GetEntityName(entity).c_str());
+    InvalidateHierarchyCache();
 
     RecordUndo();
 }
@@ -3376,8 +3413,9 @@ void EditorUI::RestoreScene(const std::string& state)
         }
     }
 
-    RebuildReflectionProbeLibrary();      // ← FIX #3
-    MarkCameraTeleported();               // ← FIX #5 (см. ниже)
+    RebuildReflectionProbeLibrary();
+    MarkCameraTeleported();
+    InvalidateHierarchyCache();          // ← FIX #63
 
     m_UndoSuppress = false;
 }

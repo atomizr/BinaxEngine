@@ -205,4 +205,22 @@ void MaterialLibrary::Clear()
     if (m_SSBO) { glDeleteBuffers(1, &m_SSBO); m_SSBO = 0; }
 }
 
+MaterialLibrary::Snapshot MaterialLibrary::TakeSnapshot() const
+{
+    Snapshot s;
+    s.CPU    = m_CPU;
+    s.Edit   = m_Edit;
+    s.ByName = m_ByName;
+    return s;
+}
+
+void MaterialLibrary::RestoreSnapshot(Snapshot&& s)
+{
+    m_CPU    = std::move(s.CPU);
+    m_Edit   = std::move(s.Edit);
+    m_ByName = std::move(s.ByName);
+    m_Dirty  = true;
+    // SSBO перезальётся на следующем Flush() — handle'ы не изменились.
+}
+
 } 

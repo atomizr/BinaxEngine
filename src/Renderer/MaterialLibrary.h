@@ -77,6 +77,8 @@ struct MaterialEditData
     float             AlphaMultiplier = 1.0f;
 };
 
+
+
 class MaterialLibrary
 {
 public:
@@ -159,6 +161,19 @@ public:
         m_CPU[h].SkyReflParams.w  = v;
         m_Dirty = true;
     }
+        // FIX #13: снимок для атомарной загрузки сцены.
+    // Восстановление — в точности те же handle'ы (индексы не меняются),
+    // поэтому ссылки из MaterialComponent остаются валидными.
+    struct Snapshot
+    {
+        std::vector<MaterialGPU>      CPU;
+        std::vector<MaterialEditData> Edit;
+        std::unordered_map<std::string, MaterialHandle> ByName;
+    };
+
+    Snapshot TakeSnapshot() const;
+    void RestoreSnapshot(Snapshot&& s);
+    
 
 private:
     MaterialLibrary() = default;

@@ -93,6 +93,11 @@ private:
     bool m_ShowInspector  = true;
     bool m_ViewportHovered = false;
     char m_HierarchySearch[128] = {};
+    bool m_HierarchyDirty = true;   // FIX #63
+    std::unordered_map<entt::entity, std::vector<entt::entity>> m_HierarchyCache;
+    std::vector<entt::entity> m_HierarchyRootsCache;
+    void RebuildHierarchyCache();                 // FIX #63
+    void InvalidateHierarchyCache() { m_HierarchyDirty = true; }  // FIX #63
     bool m_FocusSearch = false;
     glm::mat4 m_ViewMatrix       = glm::mat4(1.0f);
     glm::mat4 m_ProjectionMatrix = glm::mat4(1.0f);

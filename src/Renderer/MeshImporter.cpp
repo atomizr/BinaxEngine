@@ -36,7 +36,6 @@ void ExtractMeshData(const aiMesh* src, MeshData& dst)
         if (src->HasTextureCoords(0))
         {
             const aiVector3D& t = src->mTextureCoords[0][i];
-            // aiProcess_FlipUVs уже сделал V-flip под GL
             v.UV = glm::vec2(t.x, t.y);
         }
         else
@@ -49,14 +48,52 @@ void ExtractMeshData(const aiMesh* src, MeshData& dst)
     }
 
     dst.Indices.reserve(src->mNumFaces * 3);
+
+    // FIX #30: NaN/Inf-вершины не допускаем в буфер — они ломают
+    // растеризацию и невидимо для пользователя «портят» mesh. Для
+    // каждого triangle проверяем 3 вершины; если хоть одна — не finite,
+    // triangle отбрасываем (вырожденный, не отображается корректно всё равно).
+    auto isFinite3 = [](const glm::vec3& v)
+    {
+        return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+    };
+    auto isFinite2 = [](const glm::vec2& v)
+    {
+        return std::isfinite(v.x) && std::isfinite(v.y);
+    };
+
+    uint32_t droppedTris = 0;
+
     for (unsigned f = 0; f < src->mNumFaces; ++f)
     {
         const aiFace& face = src->mFaces[f];
         if (face.mNumIndices != 3)
             continue;
+
+        const Vertex& v0 = dst.Vertices[face.mIndices[0]];
+        const Vertex& v1 = dst.Vertices[face.mIndices[1]];
+        const Vertex& v2 = dst.Vertices[face.mIndices[2]];
+
+        const bool valid =
+            isFinite3(v0.Position) && isFinite3(v0.Normal) && isFinite2(v0.UV) &&
+            isFinite3(v1.Position) && isFinite3(v1.Normal) && isFinite2(v1.UV) &&
+            isFinite3(v2.Position) && isFinite3(v2.Normal) && isFinite2(v2.UV);
+
+        if (!valid)
+        {
+            ++droppedTris;
+            continue;
+        }
+
         dst.Indices.push_back(face.mIndices[0]);
         dst.Indices.push_back(face.mIndices[1]);
         dst.Indices.push_back(face.mIndices[2]);
+    }
+
+    if (droppedTris > 0)
+    {
+        BINAX_LOG_WARN("MeshImporter: dropped {} triangle(s) with non-finite vertex data",
+                       droppedTris);
     }
 }
 

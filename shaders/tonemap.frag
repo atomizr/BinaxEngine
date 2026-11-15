@@ -113,6 +113,16 @@ vec3 TonemapAgX(vec3 x)
     return clamp(x, 0.0, 1.0);
 }
 
+// FIX #8w: последний барьер — NaN/Inf из HDR и bloom не должны
+// попадать в tonemap curve (там они превращаются в чёрные/белые
+// артефакты, которые потом нельзя убрать пост-обработкой).
+vec3 SanitizeHDR(vec3 c)
+{
+    const bvec3 isNan = notEqual(c, c);
+    const bvec3 isInf = greaterThanEqual(abs(c), vec3(1e30));
+    return (any(isNan) || any(isInf)) ? vec3(0.0) : c;
+}
+
 vec3 ApplyTonemap(vec3 x)
 {
     if (u_TonemapMode == 0) return TonemapACES(x);
@@ -156,6 +166,8 @@ void main()
         hdr += texture(u_BloomTexture, uv).rgb * u_BloomIntensity;
 
     
+
+    hdr = SanitizeHDR(hdr);                             
     hdr = max(hdr * u_Exposure, vec3(0.0));
 
     vec3 color = ApplyTonemap(hdr);
